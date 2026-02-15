@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GroupBuy</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div id="app-loader" class="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-overlay__text">Загрузка...</div>
+</div>
+
+<div id="app"></div>
+
+<nav class="navbar" id="navbar">
+    <a href="#" class="navbar__item active" data-page="home">
+        <span class="navbar__icon">🏠</span><span>Главная</span>
+    </a>
+    <a href="#catalog" class="navbar__item" data-page="catalog">
+        <span class="navbar__icon">🔍</span><span>Каталог</span>
+    </a>
+    <a href="#groups" class="navbar__item" data-page="groups">
+        <span class="navbar__icon">👥</span><span>Сборы</span>
+    </a>
+    <a href="#orders" class="navbar__item" data-page="orders">
+        <span class="navbar__icon">📦</span><span>Заказы</span>
+    </a>
+    <a href="#profile" class="navbar__item" data-page="profile">
+        <span class="navbar__icon">👤</span><span>Профиль</span>
+    </a>
+</nav>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
