@@ -22,6 +22,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # Импортируем наши модули
 from config import settings, validate_config, is_development
@@ -186,17 +188,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/", tags=["Система"])
 async def root():
-    """
-    Корневой эндпоинт.
-    
-    Возвращает базовую информацию об API.
-    """
-    return {
-        "name": "GroupBuy Mini App API",
-        "version": "1.0.0",
-        "status": "running",
-        "docs": "/docs"
-    }
+    return FileResponse("frontend/index.html")
+
+
 
 
 @app.get("/health", tags=["Система"])
@@ -270,7 +264,8 @@ app.include_router(payments.router)
 # ============================================================
 # ЗАПУСК
 # ============================================================
-
+app.mount("/css", StaticFiles(directory="frontend/css"), name="css")
+app.mount("/js", StaticFiles(directory="frontend/js"), name="js")
 if __name__ == "__main__":
     """
     Запуск приложения напрямую через Python.
