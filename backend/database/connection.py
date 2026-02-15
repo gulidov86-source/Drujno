@@ -20,9 +20,7 @@ Supabase — это Backend-as-a-Service на базе PostgreSQL.
 from typing import Optional
 from supabase import create_client, Client
 
-import sys
-sys.path.append("../../..")
-from backend.config import settings
+from config import settings
 
 
 # ==================== КЛИЕНТ SUPABASE ====================
