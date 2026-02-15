@@ -188,7 +188,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/", tags=["Система"])
 async def root():
-    return FileResponse("frontend/index.html")
+    return FileResponse("../frontend/index.html")
 
 
 
@@ -264,8 +264,8 @@ app.include_router(payments.router)
 # ============================================================
 # ЗАПУСК
 # ============================================================
-app.mount("/css", StaticFiles(directory="frontend/css"), name="css")
-app.mount("/js", StaticFiles(directory="frontend/js"), name="js")
+app.mount("/css", StaticFiles(directory="../frontend/css"), name="css")
+app.mount("/js", StaticFiles(directory="../frontend/js"), name="js")
 if __name__ == "__main__":
     """
     Запуск приложения напрямую через Python.
