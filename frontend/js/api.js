@@ -10,7 +10,7 @@
  *   4. Один retry при 401 вместо бесконечной рекурсии
  */
 
-import { getInitData } from './telegram.js?v=3';
+import { getInitData } from './telegram.js?v=4';
 
 const BASE_URL = window.APP_CONFIG?.apiUrl || '';
 
