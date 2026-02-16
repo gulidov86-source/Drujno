@@ -11,7 +11,7 @@
    ============================================================ */
 
 /* ─── Шрифт ─── */
-@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap');
+/* Используем системные шрифты — мгновенная загрузка, нативный вид */
 
 /* ─── Базовые переменные ─── */
 :root {
@@ -74,7 +74,7 @@ html {
 }
 
 body {
-  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, 'SF Pro Text', BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;

@@ -1,70 +1,52 @@
 /**
  * ============================================================
- * Модуль: main.js
- * Описание: Точка входа — инициализация и запуск приложения
+ * Модуль: main.js (v2 — ИСПРАВЛЕН)
  * ============================================================
  * 
- * Порядок запуска (как заводится автомобиль):
- *   1. Включаем Telegram (вставляем ключ)
- *   2. Авторизуемся (запускаем двигатель)
- *   3. Загружаем данные (прогреваем)
- *   4. Настраиваем роутер (включаем GPS)
- *   5. Проверяем deep link (может сразу ехать в конкретное место)
- *   6. Показываем главную (поехали!)
+ * ИСПРАВЛЕНИЯ:
+ *   1. Юзер берётся из кеша авторизации (не отдельный запрос /me)
+ *   2. Категории загружаются параллельно с авторизацией  
+ *   3. Быстрый старт — не ждём категории для показа интерфейса
  */
 
 import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js';
-import { api, authorize } from './api.js';
-import { router, hideLoading, showToast } from './app.js';
+import { api, authorize, getCachedUser } from './api.js';
+import { router, hideLoading } from './app.js';
 import {
     renderHome, renderCatalog, renderProduct, renderGroup,
     renderCheckout, renderOrders, renderOrder, renderProfile,
     renderAddresses, renderMyGroups, setAppState
 } from './pages.js';
 
-
-// ─── Состояние приложения ───
-const appState = {
-    user: null,
-    categories: []
-};
-
-
-// ============================================================
-// ИНИЦИАЛИЗАЦИЯ
-// ============================================================
+const appState = { user: null, categories: [] };
 
 async function init() {
-    console.log('🚀 Запуск GroupBuy Mini App...');
+    console.log('🚀 GroupBuy запуск...');
 
-    // 1. Telegram
-    const inTg = initTelegram();
-    console.log(inTg ? '✅ Telegram OK' : '⚠️ Режим браузера');
+    // 1. Telegram — мгновенно
+    initTelegram();
 
-    // 2. Авторизация
-    try {
-        const authorized = await authorize();
-        if (authorized) {
-            appState.user = await api.users.me();
-            console.log('✅ Авторизация OK:', appState.user?.first_name);
-        }
-    } catch (e) {
-        console.warn('⚠️ Авторизация:', e.message);
+    // 2. Авторизация + категории ПАРАЛЛЕЛЬНО (вместо последовательно)
+    const [authOk, cats] = await Promise.allSettled([
+        authorize(),
+        api.products.categories().catch(() => [])
+    ]);
+
+    // Юзер уже закеширован в authorize()
+    if (authOk.status === 'fulfilled' && authOk.value) {
+        appState.user = getCachedUser();
+        console.log('👤 Юзер:', appState.user?.first_name);
     }
 
-    // 3. Загружаем категории
-    try {
-        const cats = await api.products.categories();
-        appState.categories = cats || [];
-    } catch (e) {
-        console.warn('⚠️ Категории:', e.message);
-        appState.categories = [];
+    // Категории
+    if (cats.status === 'fulfilled') {
+        appState.categories = cats.value || [];
     }
 
-    // 4. Передаём состояние в модуль страниц
+    // 3. Передаём состояние
     setAppState(appState);
 
-    // 5. Настраиваем маршруты
+    // 4. Маршруты
     router
         .on('', () => renderHome())
         .on('catalog', () => renderCatalog())
@@ -77,28 +59,21 @@ async function init() {
         .on('addresses', () => renderAddresses())
         .on('groups', () => renderMyGroups());
 
-    // 6. Проверяем deep link (приоритет)
-    const startParam = getStartParam();
-    if (startParam) {
-        const { groupId } = parseStartParam(startParam);
+    // 5. Deep link
+    const sp = getStartParam();
+    if (sp) {
+        const { groupId } = parseStartParam(sp);
         if (groupId) {
-            console.log('🔗 Deep link → группа:', groupId);
             hideLoading();
             router.navigate(`group/${groupId}`);
             return;
         }
     }
 
-    // 7. Убираем загрузку и запускаем роутер
+    // 6. Старт
     hideLoading();
     router.start();
 }
 
-// ─── Навигация нижней панели: вибрация при нажатии ───
-document.getElementById('navbar')?.addEventListener('click', () => {
-    haptic('light');
-});
-
-
-// ─── Запуск ───
+document.getElementById('navbar')?.addEventListener('click', () => haptic('light'));
 document.addEventListener('DOMContentLoaded', init);
