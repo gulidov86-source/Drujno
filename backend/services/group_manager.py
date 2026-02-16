@@ -226,7 +226,7 @@ class GroupManager:
             "status": "active",
             "min_participants": min_p,
             "max_participants": max_p,
-            "current_count": 1,  # Создатель — первый участник
+            "current_count": 0,  # Создатель — первый участник
             "deadline": deadline.isoformat()
         }
         
