@@ -793,7 +793,7 @@ async def get_share_data(
     manager = get_group_manager()
     
     # TODO: Получить username бота из настроек
-    bot_username = "GroupBuyTestBot"  # Заменить на реальный
+    bot_username = "drujno_bot"  # Заменить на реальный
     
     try:
         data = await manager.get_share_data(group_id, user_id, bot_username)

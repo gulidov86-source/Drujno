@@ -12,14 +12,14 @@
  *   6. Профиль: берёт юзера из appState (не из API повторно)
  */
 
-import { api, getCachedUser } from './api.js?v=2';
-import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=2';
+import { api, getCachedUser } from './api.js?v=3';
+import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=3';
 import {
     router, formatPrice, calcDiscount, formatDate, getTimeLeft,
     pluralize, showToast, showSheet, escapeHtml, debounce,
     setActiveNav, levelEmoji, levelName, orderStatusInfo, groupStatusInfo,
     productCardSkeleton, hotGroupCardSkeleton
-} from './app.js?v=2';
+} from './app.js?v=3';
 
 let appState = { user: null, categories: [] };
 export function setAppState(s) { appState = s; }
@@ -261,18 +261,25 @@ export async function renderProduct(id) {
                 </div>`:''}
                 <div id="prod-groups"></div>
             </div>
-            <div class="sticky-action">
+            <div class="sticky-action" id="product-actions">
                 <div class="sticky-action__price"><div style="font-size:0.75rem;color:var(--text-hint)">от</div><div class="price">${formatPrice(p.best_price||p.base_price)}</div></div>
-                <button class="btn btn-primary sticky-action__btn" onclick="document.querySelector('[data-gid]') ? location.hash='group/'+document.querySelector('[data-gid]').dataset.gid : alert('Сборов пока нет')">Участвовать</button>
+                <button class="btn btn-primary sticky-action__btn" id="product-main-btn">Участвовать</button>
             </div>
         </div>`;
+
+        // Храним product id для создания сбора
+        const productId = p.id;
 
         // Активные сборы
         try {
             const gl = await api.groups.list({ product_id: id, status: 'active' });
             const groups = gl.items || gl;
-            const c = document.getElementById('prod-groups'); if(!c||!groups?.length) return;
-            c.innerHTML = groups.map(g=>{
+            const c = document.getElementById('prod-groups');
+            const btn = document.getElementById('product-main-btn');
+
+            if (groups?.length && c) {
+                // Есть активные сборы — показываем их + кнопка "Участвовать"
+                c.innerHTML = groups.map(g=>{
                 const tl=getTimeLeft(g.deadline), prog=g.max_participants>0?g.current_count/g.max_participants*100:0;
                 return `<div class="active-group-widget" data-gid="${g.id}">
                     <div class="active-group-widget__header"><span class="active-group-widget__label">🟢 Активный сбор</span><span class="countdown ${tl.urgent?'urgent':''}">⏳ ${tl.text}</span></div>
@@ -280,7 +287,42 @@ export async function renderProduct(id) {
                     <div class="progress-bar"><div class="progress-bar__fill" style="width:${Math.min(prog,100)}%"></div></div>
                     <button class="btn btn-primary btn-block" style="margin-top:12px" onclick="location.hash='group/${g.id}'">Присоединиться</button>
                 </div>`;
-            }).join('');
+                }).join('');
+
+                // Кнопка внизу ведёт к первому сбору
+                if (btn) btn.onclick = () => { location.hash = `group/${groups[0].id}`; };
+            } else {
+                // Нет активных сборов — показываем кнопку "Создать сбор"
+                if (c) {
+                    c.innerHTML = `<div style="text-align:center;padding:16px;background:var(--bg-secondary);border-radius:var(--radius-lg);margin-top:8px">
+                        <div style="font-size:1.5rem;margin-bottom:8px">👥</div>
+                        <div style="font-weight:700;margin-bottom:4px">Активных сборов нет</div>
+                        <div style="font-size:0.85rem;color:var(--text-hint)">Создайте первый сбор и пригласите друзей!</div>
+                    </div>`;
+                }
+                if (btn) {
+                    btn.textContent = '🚀 Создать сбор';
+                    btn.onclick = async () => {
+                        haptic('medium');
+                        btn.disabled = true; btn.textContent = 'Создаём...';
+                        try {
+                            const result = await api.groups.create({ product_id: productId });
+                            if (result.group_id) {
+                                showToast('Сбор создан!', 'success');
+                                haptic('success');
+                                location.hash = `group/${result.group_id}`;
+                            } else {
+                                showToast(result.message || 'Ошибка', 'error');
+                                btn.disabled = false; btn.textContent = '🚀 Создать сбор';
+                            }
+                        } catch(e) {
+                            showToast(e.message || 'Не удалось создать сбор', 'error');
+                            haptic('error');
+                            btn.disabled = false; btn.textContent = '🚀 Создать сбор';
+                        }
+                    };
+                }
+            }
         } catch(e) { console.error('Groups for product:', e); }
 
     } catch(e) { console.error(e); showToast('Ошибка загрузки','error'); }
