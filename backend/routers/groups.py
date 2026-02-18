@@ -5,6 +5,10 @@
 
 Это ядро API — работа с групповыми закупками.
 
+ОБНОВЛЕНО: Добавлена интеграция с системой уведомлений (Фаза 8).
+- При присоединении к сбору организатор получает push в Telegram
+- Уведомления отправляются в фоновом режиме (BackgroundTasks)
+
 Эндпоинты:
     GET  /api/groups              — Список активных сборов
     GET  /api/groups/{id}         — Детали сбора
@@ -24,7 +28,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, status
 from pydantic import BaseModel, Field
 
 import sys
@@ -44,6 +48,21 @@ from services.price_calculator import (
 )
 from utils.auth import get_current_user, get_current_user_optional
 from utils.telegram import parse_start_param
+
+
+# ============================================================
+# ИМПОРТ УВЕДОМЛЕНИЙ
+# ============================================================
+# Используем try/except чтобы приложение работало даже если
+# модуль уведомлений недоступен (graceful degradation)
+
+try:
+    from services.notification_integration import notify_on_join
+    NOTIFICATIONS_ENABLED = True
+    print("✅ Уведомления включены")
+except ImportError:
+    NOTIFICATIONS_ENABLED = False
+    print("⚠️ Уведомления недоступны (notification_integration не найден)")
 
 
 # ============================================================
@@ -293,6 +312,7 @@ def build_group_list_item(
 async def get_groups(
     # Фильтры
     category_id: Optional[int] = Query(None, description="Категория товара"),
+    product_id: Optional[int] = Query(None, description="ID товара"),
     status: str = Query("active", regex="^(active|completed|all)$", description="Статус сбора"),
     
     # Сортировка
@@ -327,6 +347,10 @@ async def get_groups(
     elif status == "completed":
         query = query.eq("status", "completed")
     # "all" — без фильтра
+    
+    # Фильтр по товару
+    if product_id:
+        query = query.eq("product_id", product_id)
     
     # Сортировка
     if sort_by == "popular":
@@ -619,15 +643,23 @@ async def create_group(
     **Параметры:**
     - `invited_by_user_id` — ID пригласившего (опционально)
     - `start_param` — параметр из deep link (парсится автоматически)
+    
+    **Уведомления:**
+    После успешного присоединения организатор получает push-уведомление
+    в Telegram о новом участнике.
     """
 )
 async def join_group(
     group_id: int,
+    background_tasks: BackgroundTasks,
     request: JoinGroupRequest = JoinGroupRequest(),
     user_id: int = Depends(get_current_user)
 ):
     """
     Присоединиться к сбору.
+    
+    После успешного присоединения организатор получает уведомление в Telegram.
+    Уведомление отправляется в фоне (background_tasks), чтобы не замедлять ответ.
     """
     # Парсим start_param если есть
     invited_by = request.invited_by_user_id
@@ -652,6 +684,20 @@ async def join_group(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=result.message
+        )
+    
+    # ============================================================
+    # УВЕДОМЛЕНИЕ ОРГАНИЗАТОРУ
+    # ============================================================
+    # Отправляем в фоновом режиме, чтобы не замедлять ответ пользователю.
+    # Организатор увидит в Telegram: "К вашему сбору присоединился Маша!"
+    
+    if NOTIFICATIONS_ENABLED:
+        background_tasks.add_task(
+            notify_on_join,
+            group_id=group_id,
+            new_member_id=user_id,
+            invited_by_id=invited_by
         )
     
     return JoinGroupResponse(
