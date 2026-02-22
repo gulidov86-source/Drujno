@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     
     # Бонус организатора по умолчанию (процент)
     ORGANIZER_BONUS_PERCENT: float = 2.0
+    
+    ADMIN_BOT_TOKEN: str = "8549743015:AAG71eqE7ZKb_vTZ94VcK0zfZ38Q5KMPyuQ"  # Токен админ-бота (отдельный от основного)
 
     class Config:
         """
