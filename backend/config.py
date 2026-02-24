@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Пример: https://groupbuy-app.up.railway.app
     TELEGRAM_WEBAPP_URL: str = "http://localhost:8000"
     
+    # Токен админ-бота (отдельный от основного!)
+    ADMIN_BOT_TOKEN: str = "8549743015:AAG71eqE7ZKb_vTZ94VcK0zfZ38Q5KMPyuQ"
+    
     # ==================== БАЗА ДАННЫХ (SUPABASE) ====================
     # URL проекта Supabase
     # Найти: Supabase Dashboard → Settings → API → Project URL
@@ -226,6 +229,9 @@ def validate_config() -> dict:
     
     if not settings.CDEK_CLIENT_ID:
         warnings.append("CDEK_CLIENT_ID не заполнен — расчёт доставки не будет работать")
+        
+    if not settings.ADMIN_BOT_TOKEN:
+        warnings.append("ADMIN_BOT_TOKEN не заполнен — админ-бот не будет работать")
     
     if settings.APP_ENV == "production" and settings.DEBUG:
         warnings.append("DEBUG=True в production — рекомендуется отключить")

@@ -255,10 +255,10 @@ app.include_router(products.router)
 app.include_router(groups.router)
 app.include_router(orders.router)
 app.include_router(payments.router)
-#app.include_router(delivery.router)
-#app.include_router(returns.router)
-#app.include_router(support.router)
-#app.include_router(notifications.router)
+app.include_router(delivery.router)
+app.include_router(returns.router)
+app.include_router(support.router)
+app.include_router(notifications.router)
 
 
 # ============================================================
