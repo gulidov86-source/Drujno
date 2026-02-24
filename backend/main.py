@@ -248,7 +248,7 @@ async def get_config():
 # TODO: Раскомментировать после создания роутеров в Фазе 2
 
 #from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
-from routers import users, products, groups, orders, payments
+from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
 
 app.include_router(users.router)
 app.include_router(products.router)
