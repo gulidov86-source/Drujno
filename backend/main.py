@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
+import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -75,9 +76,43 @@ async def lifespan(app: FastAPI):
     print(f"📚 Документация: http://{settings.HOST}:{settings.PORT}/docs")
     print("─" * 50)
     
+    # ===== CRON SCHEDULER =====
+    # Запускаем фоновые задачи для проверки просроченных сборов
+    async def background_scheduler():
+        """Фоновый планировщик: проверка сборов каждые 5 минут."""
+        await asyncio.sleep(30)  # Даём приложению стартовать
+        while True:
+            try:
+                from services.group_manager import get_group_manager
+                manager = get_group_manager()
+                
+                # 1. Проверяем просроченные сборы
+                results = await manager.check_expired_groups()
+                if results:
+                    print(f"⏰ Cron: обработано {len(results)} просроченных сборов")
+                
+                # 2. Обрабатываем завершённые сборы (списание/возврат денег)
+                # Импортируем и вызываем если модуль существует
+                try:
+                    from cron.process_completed_groups import main as process_completed
+                    await process_completed()
+                except ImportError:
+                    pass
+                except Exception as e:
+                    print(f"⚠️  Cron process_completed: {e}")
+                    
+            except Exception as e:
+                print(f"⚠️  Cron ошибка: {e}")
+            
+            await asyncio.sleep(300)  # Каждые 5 минут
+    
+    scheduler_task = asyncio.create_task(background_scheduler())
+    print("⏰ Cron scheduler запущен (каждые 5 мин)")
+    
     yield  # Приложение работает
     
     # ===== SHUTDOWN =====
+    scheduler_task.cancel()
     print("👋 Остановка приложения...")
     # Здесь можно закрыть соединения, сохранить состояние и т.д.
 
