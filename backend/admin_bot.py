@@ -29,6 +29,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 import sys
 sys.path.append("..")
@@ -38,7 +39,7 @@ from database.connection import get_supabase_client
 ADMIN_BOT_TOKEN = getattr(settings, 'ADMIN_BOT_TOKEN', '')
 ADMIN_IDS = []  # Вставь свой Telegram ID
 
-bot = Bot(token=ADMIN_BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 SE = {"pending":"⏳","frozen":"🧊","paid":"💳","processing":"⚙️","shipped":"🚚","delivered":"✅","cancelled":"❌","refunded":"🔄"}
