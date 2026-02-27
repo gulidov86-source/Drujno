@@ -1103,7 +1103,7 @@ export async function renderSupport() {
                     <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
                 </div>
                 <div style="padding:0 16px 8px">
-                    <div style="font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.last_message || t.message || '')}</div>
+                    <div style="font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.last_message?.text || t.message || '')}</div>
                 </div>
                 <div class="order-card__footer">
                     <span>${formatDate(t.updated_at || t.created_at, 'relative')}</span>
@@ -1215,9 +1215,9 @@ export async function renderSupportTicket(id) {
 
             <div class="chat-messages" id="chat-msgs">
                 ${messages.map(m => `
-                    <div class="chat-msg ${m.sender === 'user' ? 'chat-msg--user' : 'chat-msg--support'}">
+                    <div class="chat-msg ${m.sender_type === 'user' ? 'chat-msg--user' : 'chat-msg--support'}">
                         <div class="chat-msg__bubble">${escapeHtml(m.text)}</div>
-                        <div class="chat-msg__time">${formatDate(m.timestamp || m.created_at, 'datetime')}</div>
+                        <div class="chat-msg__time">${formatDate(m.created_at, 'datetime')}</div>
                     </div>
                 `).join('')}
                 ${!messages.length ? '<div style="text-align:center;padding:24px;color:var(--text-hint)">Начало переписки</div>' : ''}

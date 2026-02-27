@@ -489,20 +489,33 @@ async def create_order(
             detail="Сбор недоступен для присоединения"
         )
     
-    # 2. Проверяем, не участвует ли уже
-    existing_member = (
-        db.table("group_members")
-        .select("id")
+    # 2. Проверяем, нет ли уже активного заказа на этот сбор
+    # 
+    # Почему проверяем orders, а НЕ group_members?
+    # 
+    # Наглядно — поток пользователя:
+    #   1. На странице сбора нажал «Присоединиться» → join() добавил в group_members
+    #   2. Теперь нажал «Оформить» → create_order() создаёт заказ и платёж
+    # 
+    # Если проверять group_members — пользователь никогда не сможет оплатить,
+    # потому что он УЖЕ член группы после шага 1.
+    # 
+    # Правильно: проверять, нет ли уже ЗАКАЗА (чтобы не создать дубль).
+    existing_order = (
+        db.table("orders")
+        .select("id, status")
         .eq("group_id", request.group_id)
         .eq("user_id", user_id)
+        .neq("status", "cancelled")
         .limit(1)
         .execute()
     )
     
-    if existing_member.data:
+    if existing_order.data:
+        existing = existing_order.data[0]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Вы уже участвуете в этом сборе"
+            detail=f"У вас уже есть заказ #{existing['id']} на этот сбор"
         )
     
     # 3. Проверяем адрес
@@ -529,8 +542,39 @@ async def create_order(
     base_price = Decimal(str(product_data.get("base_price", 0)))
     current_count = group_data.get("current_count", 0)
     
-    # Цена для нового участника (count + 1)
-    final_price = calculate_current_price(price_tiers, current_count + 1, base_price)
+    # Проверяем, является ли пользователь уже участником сбора
+    # 
+    # Наглядно — два сценария:
+    #   A) Пользователь уже нажал «Присоединиться» → он В group_members
+    #      → current_count уже ВКЛЮЧАЕТ его → цена по current_count
+    #   B) Пользователь пришёл напрямую (без join) → его НЕТ в group_members
+    #      → нужно добавить → цена по current_count + 1
+    #
+    is_already_member = (
+        db.table("group_members")
+        .select("id")
+        .eq("group_id", request.group_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    
+    if is_already_member.data:
+        # Уже участник — цена по текущему количеству
+        final_price = calculate_current_price(price_tiers, current_count, base_price)
+    else:
+        # Не участник — добавляем в сбор + цена с учётом нового участника
+        final_price = calculate_current_price(price_tiers, current_count + 1, base_price)
+        db.table("group_members").insert({
+            "group_id": request.group_id,
+            "user_id": user_id,
+            "joined_at": datetime.now(timezone.utc).isoformat()
+        }).execute()
+        # Обновляем счётчик
+        db.table("groups").update({
+            "current_count": current_count + 1
+        }).eq("id", request.group_id).execute()
+    
     delivery_cost = calculate_delivery_cost(request.delivery_type, address_data.get("city"))
     total_amount = final_price + delivery_cost
     

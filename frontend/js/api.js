@@ -105,6 +105,25 @@ async function authorize() {
 
 // ─── API ───
 
+/**
+ * Распаковщик ответов бэкенда.
+ * 
+ * Наглядный пример:
+ *   Бэкенд отвечает:  { success: true, data: { id: 5, name: "Тикет" } }
+ *   После unwrap:      { id: 5, name: "Тикет" }
+ * 
+ *   Бэкенд отвечает:  { success: true, data: [{...}, {...}], count: 2 }
+ *   После unwrap:      [{...}, {...}]
+ * 
+ * Зачем? Старые эндпоинты (products, groups) возвращают данные "плоско",
+ * а новые (support, notifications, returns) оборачивают в { success, data }.
+ * unwrap() убирает эту разницу, чтобы фронтенд работал единообразно.
+ */
+function unwrap(r) {
+    if (r && r.data !== undefined) return r.data;
+    return r;
+}
+
 const api = {
     users: {
         auth: () => authorize(),
@@ -151,18 +170,21 @@ const api = {
     },
 
     // ─── Возвраты ───
+    // Бэкенд оборачивает: { success, data: {...} }
+    // .then(unwrap) — достаём данные из обёртки, чтобы фронтенд
+    // работал единообразно: const ret = await api.returns.get(1) → ret.id
     returns: {
-        list: () => request('GET', '/api/returns'),
-        get: (id) => request('GET', `/api/returns/${id}`),
-        create: (d) => request('POST', '/api/returns', d),
+        list: () => request('GET', '/api/returns').then(unwrap),
+        get: (id) => request('GET', `/api/returns/${id}`).then(unwrap),
+        create: (d) => request('POST', '/api/returns', d).then(unwrap),
         cancel: (id) => request('POST', `/api/returns/${id}/cancel`),
     },
 
     // ─── Поддержка ───
     support: {
-        list: () => request('GET', '/api/support'),
-        get: (id) => request('GET', `/api/support/${id}`),
-        create: (d) => request('POST', '/api/support', d),
+        list: () => request('GET', '/api/support').then(unwrap),
+        get: (id) => request('GET', `/api/support/${id}`).then(unwrap),
+        create: (d) => request('POST', '/api/support', d).then(unwrap),
         sendMessage: (id, text) => request('POST', `/api/support/${id}/message`, { text }),
         close: (id) => request('POST', `/api/support/${id}/close`),
         faq: () => request('GET', '/api/support/faq'),
@@ -170,7 +192,7 @@ const api = {
 
     // ─── Уведомления ───
     notifications: {
-        list: (p = {}) => request('GET', `/api/notifications${buildQuery(p)}`),
+        list: (p = {}) => request('GET', `/api/notifications${buildQuery(p)}`).then(unwrap),
         unreadCount: () => request('GET', '/api/notifications/unread-count'),
         markRead: (id) => request('POST', `/api/notifications/${id}/read`),
         markAllRead: () => request('POST', '/api/notifications/read-all'),
