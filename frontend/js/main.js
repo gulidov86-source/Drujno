@@ -1,21 +1,26 @@
 /**
  * ============================================================
- * Модуль: main.js (v3 — полная интеграция)
+ * Модуль: main.js (v2 — ИСПРАВЛЕН)
  * ============================================================
+ * 
+ * ИСПРАВЛЕНИЯ:
+ *   1. Юзер берётся из кеша авторизации (не отдельный запрос /me)
+ *   2. Категории загружаются параллельно с авторизацией  
+ *   3. Быстрый старт — не ждём категории для показа интерфейса
  */
 
-import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=5';
-import { api, authorize, getCachedUser } from './api.js?v=5';
-import { router, hideLoading } from './app.js?v=5';
+import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=4';
+import { api, authorize, getCachedUser } from './api.js?v=4';
+import { router, hideLoading } from './app.js?v=4';
 import {
     renderHome, renderCatalog, renderProduct, renderGroup,
     renderCheckout, renderOrders, renderOrder, renderProfile,
     renderAddresses, renderMyGroups,
-    renderReturns, renderReturnCreate,
+    renderReturns, renderReturn,
     renderSupport, renderSupportCreate, renderSupportTicket,
     renderNotifications, renderFAQ,
-    setAppState
-} from './pages.js?v=5';
+    loadNotifBadge, setAppState
+} from './pages.js?v=4';
 
 const appState = { user: null, categories: [] };
 
@@ -25,17 +30,19 @@ async function init() {
     // 1. Telegram — мгновенно
     initTelegram();
 
-    // 2. Авторизация + категории ПАРАЛЛЕЛЬНО
+    // 2. Авторизация + категории ПАРАЛЛЕЛЬНО (вместо последовательно)
     const [authOk, cats] = await Promise.allSettled([
         authorize(),
         api.products.categories().catch(() => [])
     ]);
 
+    // Юзер уже закеширован в authorize()
     if (authOk.status === 'fulfilled' && authOk.value) {
         appState.user = getCachedUser();
         console.log('👤 Юзер:', appState.user?.first_name);
     }
 
+    // Категории
     if (cats.status === 'fulfilled') {
         appState.categories = cats.value || [];
     }
@@ -55,9 +62,9 @@ async function init() {
         .on('profile', () => renderProfile())
         .on('addresses', () => renderAddresses())
         .on('groups', () => renderMyGroups())
-        // Новые маршруты
+        // Новые маршруты — Этап 2
         .on('returns', () => renderReturns())
-        .on('return/create/:orderId', (p) => renderReturnCreate(p.orderId))
+        .on('return/:id', (p) => renderReturn(p.id))
         .on('support', () => renderSupport())
         .on('support/create', () => renderSupportCreate())
         .on('support/:id', (p) => renderSupportTicket(p.id))
@@ -79,30 +86,8 @@ async function init() {
     hideLoading();
     router.start();
 
-    // 7. Бейдж непрочитанных уведомлений
-    loadNotifBadge();
-}
-
-async function loadNotifBadge() {
-    try {
-        const res = await api.notifications.unreadCount();
-        const count = res.count || res.unread_count || 0;
-        if (count > 0) {
-            const profileNav = document.querySelector('[data-page="profile"] .navbar__icon');
-            if (profileNav) {
-                // Добавляем бейдж если ещё нет
-                let badge = profileNav.querySelector('.notif-badge');
-                if (!badge) {
-                    badge = document.createElement('span');
-                    badge.className = 'notif-badge';
-                    profileNav.style.position = 'relative';
-                    profileNav.appendChild(badge);
-                }
-                badge.textContent = count > 99 ? '99+' : count;
-                badge.style.display = '';
-            }
-        }
-    } catch(e) { /* тихо игнорируем */ }
+    // 7. Бейдж непрочитанных уведомлений (не блокирует запуск)
+    if (appState.user) loadNotifBadge();
 }
 
 document.getElementById('navbar')?.addEventListener('click', () => haptic('light'));

@@ -1,14 +1,16 @@
 /**
  * ============================================================
- * Модуль: api.js (v3 — Полная интеграция)
+ * Модуль: api.js (v2 — ИСПРАВЛЕН)
  * ============================================================
  * 
- * Все API модули:
- *   users, products, groups, orders, payments,
- *   delivery, returns, support, notifications
+ * ИСПРАВЛЕНИЯ:
+ *   1. authorize() — парсит data.token.access_token (не data.token)
+ *   2. Токен хранится в памяти (sessionStorage ненадёжен в Mini App)
+ *   3. Кешируем юзера из ответа авторизации (экономим запрос /me)
+ *   4. Один retry при 401 вместо бесконечной рекурсии
  */
 
-import { getInitData } from './telegram.js?v=5';
+import { getInitData } from './telegram.js?v=4';
 
 const BASE_URL = window.APP_CONFIG?.apiUrl || '';
 
@@ -66,6 +68,14 @@ class ApiError extends Error {
 
 // ─── Авторизация ───
 
+/**
+ * Бэкенд /api/users/auth возвращает:
+ * {
+ *   "user": { id, first_name, level, ... },
+ *   "token": { "access_token": "eyJ...", "token_type": "bearer", "expires_in": 604800 },
+ *   "is_new": false
+ * }
+ */
 async function authorize() {
     const initData = getInitData();
     if (!initData) { console.warn('⚠️ Нет initData'); return false; }
@@ -78,6 +88,7 @@ async function authorize() {
         });
         const data = await res.json();
 
+        // ✅ Ключевое исправление: token.access_token
         if (res.ok && data.token?.access_token) {
             saveToken(data.token.access_token);
             setCachedUser(data.user);
@@ -134,26 +145,24 @@ const api = {
 
     // ─── Доставка (СДЭК) ───
     delivery: {
-        cities: (query) => request('GET', `/api/delivery/cities?query=${encodeURIComponent(query)}`),
-        pickupPoints: (city, type = null) => request('GET', `/api/delivery/pickup-points?city=${encodeURIComponent(city)}${type ? '&type=' + type : ''}`),
-        calculate: (toCity, weight = 500) => request('GET', `/api/delivery/calculate?to_city=${encodeURIComponent(toCity)}&weight=${weight}`),
-        tariffs: (toCity, weight = 500) => request('GET', `/api/delivery/tariffs?to_city=${encodeURIComponent(toCity)}&weight=${weight}`),
-        track: (trackingNumber) => request('GET', `/api/delivery/tracking/${trackingNumber}`),
+        cities: (q) => request('GET', `/api/delivery/cities?query=${encodeURIComponent(q)}`),
+        points: (cityCode) => request('GET', `/api/delivery/points?city_code=${cityCode}`),
+        calculate: (d) => request('POST', '/api/delivery/calculate', d),
     },
 
     // ─── Возвраты ───
     returns: {
-        list: (status = null) => request('GET', `/api/returns${status ? '?status=' + status : ''}`),
+        list: () => request('GET', '/api/returns'),
         get: (id) => request('GET', `/api/returns/${id}`),
-        create: (data) => request('POST', '/api/returns', data),
+        create: (d) => request('POST', '/api/returns', d),
         cancel: (id) => request('POST', `/api/returns/${id}/cancel`),
     },
 
     // ─── Поддержка ───
     support: {
-        list: (status = null) => request('GET', `/api/support${status ? '?status=' + status : ''}`),
+        list: () => request('GET', '/api/support'),
         get: (id) => request('GET', `/api/support/${id}`),
-        create: (data) => request('POST', '/api/support', data),
+        create: (d) => request('POST', '/api/support', d),
         sendMessage: (id, text) => request('POST', `/api/support/${id}/message`, { text }),
         close: (id) => request('POST', `/api/support/${id}/close`),
         faq: () => request('GET', '/api/support/faq'),
@@ -166,7 +175,7 @@ const api = {
         markRead: (id) => request('POST', `/api/notifications/${id}/read`),
         markAllRead: () => request('POST', '/api/notifications/read-all'),
         settings: () => request('GET', '/api/notifications/settings'),
-        updateSettings: (data) => request('PUT', '/api/notifications/settings', data),
+        updateSettings: (d) => request('PUT', '/api/notifications/settings', d),
     },
 };
 

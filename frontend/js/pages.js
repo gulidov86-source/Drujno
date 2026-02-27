@@ -12,14 +12,14 @@
  *   6. Профиль: берёт юзера из appState (не из API повторно)
  */
 
-import { api, getCachedUser } from './api.js?v=5';
-import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=5';
+import { api, getCachedUser } from './api.js?v=4';
+import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=4';
 import {
     router, formatPrice, calcDiscount, formatDate, getTimeLeft,
     pluralize, showToast, showSheet, escapeHtml, debounce,
     setActiveNav, levelEmoji, levelName, orderStatusInfo, groupStatusInfo,
     productCardSkeleton, hotGroupCardSkeleton
-} from './app.js?v=5';
+} from './app.js?v=4';
 
 let appState = { user: null, categories: [] };
 export function setAppState(s) { appState = s; }
@@ -441,11 +441,6 @@ export async function renderCheckout(groupId) {
         const addrs = addrResult.items || addrResult || [];
         let selAddr = addrs.find(a=>a.is_default)?.id || addrs[0]?.id || null;
         let delType = 'pickup';
-        let deliveryCost = 0;
-        let deliveryDays = '';
-        let selectedCity = addrs.find(a=>a.id===selAddr)?.city || '';
-        let pickupPoints = [];
-        let selectedPvz = null;
 
         app.innerHTML = `
         <div class="page-enter" style="padding-bottom:90px">
@@ -458,26 +453,6 @@ export async function renderCheckout(groupId) {
                 </div>
             </div>
             <div class="checkout-section">
-                <div class="checkout-section__title">Город доставки</div>
-                <div style="position:relative">
-                    <input type="text" class="form-input" id="ck-city" placeholder="Введите город..." value="${escapeHtml(selectedCity)}" autocomplete="off">
-                    <div id="ck-city-list" class="autocomplete-dropdown" style="display:none"></div>
-                </div>
-            </div>
-            <div class="checkout-section">
-                <div class="checkout-section__title">Способ доставки</div>
-                <div id="ck-del">
-                    <div class="address-card selected" data-del="pickup" style="margin-bottom:8px;cursor:pointer"><div class="address-card__icon">📦</div><div class="address-card__text"><div class="address-card__title">Пункт выдачи (ПВЗ)</div><div class="address-card__detail" id="ck-pvz-info">Выберите город для расчёта</div></div></div>
-                    <div class="address-card" data-del="courier" style="cursor:pointer"><div class="address-card__icon">🚚</div><div class="address-card__text"><div class="address-card__title">Курьером до двери</div><div class="address-card__detail" id="ck-courier-info">Выберите город для расчёта</div></div></div>
-                </div>
-            </div>
-            <div id="ck-pvz-section" style="display:none">
-                <div class="checkout-section">
-                    <div class="checkout-section__title">Пункт выдачи</div>
-                    <div id="ck-pvz-list" style="max-height:200px;overflow-y:auto"></div>
-                </div>
-            </div>
-            <div class="checkout-section" id="ck-addr-section" style="display:none">
                 <div class="checkout-section__title">Адрес доставки</div>
                 <div id="ck-addrs">${addrs.length ? addrs.map(a=>`
                     <div class="address-card ${a.id===selAddr?'selected':''}" data-addr="${a.id}" style="margin-bottom:8px">
@@ -485,182 +460,48 @@ export async function renderCheckout(groupId) {
                         <div class="address-card__text"><div class="address-card__title">${escapeHtml(a.title)}</div><div class="address-card__detail">${escapeHtml(a.city)}, ${escapeHtml(a.street)}, д. ${escapeHtml(a.building)}${a.apartment?', кв. '+escapeHtml(a.apartment):''}</div></div>
                     </div>`).join('') : '<div class="empty-state" style="padding:16px"><div class="empty-state__text">Добавьте адрес</div><button class="btn btn-secondary btn-sm" onclick="location.hash=\'addresses\'">Добавить</button></div>'}</div>
             </div>
+            <div class="checkout-section">
+                <div class="checkout-section__title">Доставка</div>
+                <div id="ck-del">
+                    <div class="address-card selected" data-del="pickup" style="margin-bottom:8px;cursor:pointer"><div class="address-card__icon">📦</div><div class="address-card__text"><div class="address-card__title">Пункт выдачи</div><div class="address-card__detail">Бесплатно</div></div></div>
+                    <div class="address-card" data-del="courier" style="cursor:pointer"><div class="address-card__icon">🚚</div><div class="address-card__text"><div class="address-card__title">Курьером</div><div class="address-card__detail">от 300 ₽</div></div></div>
+                </div>
+            </div>
             <div class="order-summary">
                 <div class="order-summary__row"><span>Товар</span><span>${formatPrice(g.current_price)}</span></div>
-                <div class="order-summary__row"><span>Доставка</span><span id="ck-dcost">Рассчитывается...</span></div>
-                ${deliveryDays?`<div class="order-summary__row"><span>Срок</span><span id="ck-days">${deliveryDays}</span></div>`:''}
+                <div class="order-summary__row"><span>Доставка</span><span id="ck-dcost">Бесплатно</span></div>
                 <div class="order-summary__total"><span>Итого</span><span id="ck-total">${formatPrice(g.current_price)}</span></div>
                 <div style="font-size:0.8rem;color:var(--text-hint);margin-top:4px">💡 Сумма будет заморожена до завершения сбора</div>
             </div>
-            <div class="sticky-action"><button class="btn btn-success btn-block btn-lg" id="pay-btn" disabled>💳 Оплатить</button></div>
+            <div class="sticky-action"><button class="btn btn-success btn-block btn-lg" id="pay-btn" ${!addrs.length?'disabled':''}>💳 Оплатить ${formatPrice(g.current_price)}</button></div>
         </div>`;
 
-        // Функция обновления итого
-        function updateTotal() {
-            const dc = document.getElementById('ck-dcost');
-            const tot = document.getElementById('ck-total');
-            const btn = document.getElementById('pay-btn');
-            if(dc) dc.textContent = deliveryCost > 0 ? formatPrice(deliveryCost) : 'Бесплатно';
-            const total = parseFloat(g.current_price) + deliveryCost;
-            if(tot) tot.textContent = formatPrice(total);
-            if(btn) {
-                const canPay = selectedCity && (delType==='pickup' ? selectedPvz : selAddr);
-                btn.disabled = !canPay;
-                btn.textContent = canPay ? `💳 Оплатить ${formatPrice(total)}` : '💳 Оплатить';
-            }
-        }
-
-        // Расчёт доставки по городу
-        async function calcDelivery(city) {
-            if(!city || city.length < 2) return;
-            try {
-                const res = await api.delivery.calculate(city);
-                if(res.success && res.tariff) {
-                    deliveryCost = res.tariff.price || 0;
-                    deliveryDays = res.tariff.min_days && res.tariff.max_days
-                        ? `${res.tariff.min_days}-${res.tariff.max_days} дн.` : '';
-                    const info = `${formatPrice(deliveryCost)}${deliveryDays ? ', ' + deliveryDays : ''}`;
-                    const pvzInfo = document.getElementById('ck-pvz-info');
-                    if(pvzInfo) pvzInfo.textContent = info;
-                }
-                // Тарифы курьера
-                const tariffs = await api.delivery.tariffs(city).catch(()=>null);
-                if(tariffs?.success && tariffs.tariffs?.length > 1) {
-                    const courier = tariffs.tariffs.find(t => t.name?.toLowerCase().includes('дверь'));
-                    if(courier) {
-                        const ci = document.getElementById('ck-courier-info');
-                        if(ci) ci.textContent = `${formatPrice(courier.price)}${courier.min_days ? ', ' + courier.min_days + '-' + courier.max_days + ' дн.' : ''}`;
-                    }
-                }
-            } catch(e) { console.warn('Расчёт доставки:', e); }
-            updateTotal();
-        }
-
-        // Загрузка ПВЗ
-        async function loadPvzPoints(city) {
-            const list = document.getElementById('ck-pvz-list');
-            if(!list) return;
-            list.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-hint)">Загрузка ПВЗ...</div>';
-            try {
-                const res = await api.delivery.pickupPoints(city);
-                pickupPoints = res.success ? (res.points || []) : [];
-                if(!pickupPoints.length) {
-                    list.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-hint)">ПВЗ не найдены</div>';
-                    return;
-                }
-                list.innerHTML = pickupPoints.slice(0, 20).map((p, i) => `
-                    <div class="address-card ${i===0?'selected':''}" data-pvz="${escapeHtml(p.code)}" style="margin-bottom:6px;cursor:pointer">
-                        <div class="address-card__icon">📦</div>
-                        <div class="address-card__text">
-                            <div class="address-card__title">${escapeHtml(p.name || 'ПВЗ ' + p.code)}</div>
-                            <div class="address-card__detail">${escapeHtml(p.address || '')}${p.work_time ? ' · ' + escapeHtml(p.work_time) : ''}</div>
-                        </div>
-                    </div>`).join('');
-                selectedPvz = pickupPoints[0]?.code || null;
-                updateTotal();
-            } catch(e) { list.innerHTML = '<div style="padding:12px;color:var(--text-hint)">Ошибка загрузки ПВЗ</div>'; }
-        }
-
-        // Автокомплит города
-        const cityInput = document.getElementById('ck-city');
-        const cityList = document.getElementById('ck-city-list');
-        let cityTimer = null;
-        cityInput?.addEventListener('input', () => {
-            clearTimeout(cityTimer);
-            cityTimer = setTimeout(async () => {
-                const q = cityInput.value.trim();
-                if(q.length < 2) { cityList.style.display='none'; return; }
-                try {
-                    const res = await api.delivery.cities(q);
-                    if(res.success && res.cities?.length) {
-                        cityList.innerHTML = res.cities.map(c =>
-                            `<div class="autocomplete-item" data-city="${escapeHtml(c.city)}">${escapeHtml(c.city)}${c.region ? ', ' + escapeHtml(c.region) : ''}</div>`
-                        ).join('');
-                        cityList.style.display = 'block';
-                    } else { cityList.style.display = 'none'; }
-                } catch(e) { cityList.style.display = 'none'; }
-            }, 300);
-        });
-        cityList?.addEventListener('click', (e) => {
-            const item = e.target.closest('.autocomplete-item');
-            if(!item) return;
-            selectedCity = item.dataset.city;
-            cityInput.value = selectedCity;
-            cityList.style.display = 'none';
-            haptic('light');
-            calcDelivery(selectedCity);
-            if(delType === 'pickup') {
-                document.getElementById('ck-pvz-section').style.display = '';
-                loadPvzPoints(selectedCity);
-            }
-        });
-
-        // Выбор типа доставки
-        document.getElementById('ck-del')?.addEventListener('click', e => {
-            const c = e.target.closest('[data-del]'); if(!c) return; haptic('light');
-            document.querySelectorAll('#ck-del .address-card').forEach(c=>c.classList.remove('selected'));
-            c.classList.add('selected'); delType = c.dataset.del;
-            
-            const pvzSect = document.getElementById('ck-pvz-section');
-            const addrSect = document.getElementById('ck-addr-section');
-            if(delType === 'pickup') {
-                if(pvzSect) pvzSect.style.display = '';
-                if(addrSect) addrSect.style.display = 'none';
-                if(selectedCity) loadPvzPoints(selectedCity);
-            } else {
-                if(pvzSect) pvzSect.style.display = 'none';
-                if(addrSect) addrSect.style.display = '';
-            }
-            updateTotal();
-        });
-
-        // Выбор ПВЗ
-        document.getElementById('ck-pvz-list')?.addEventListener('click', e => {
-            const c = e.target.closest('[data-pvz]'); if(!c) return; haptic('light');
-            document.querySelectorAll('#ck-pvz-list .address-card').forEach(c=>c.classList.remove('selected'));
-            c.classList.add('selected'); selectedPvz = c.dataset.pvz;
-            updateTotal();
-        });
-
-        // Выбор адреса (для курьера)
         document.getElementById('ck-addrs')?.addEventListener('click', e => {
             const c = e.target.closest('[data-addr]'); if(!c) return; haptic('light');
             document.querySelectorAll('#ck-addrs .address-card').forEach(c=>c.classList.remove('selected'));
             c.classList.add('selected'); selAddr = parseInt(c.dataset.addr);
-            updateTotal();
         });
 
-        // Оплата
+        document.getElementById('ck-del')?.addEventListener('click', e => {
+            const c = e.target.closest('[data-del]'); if(!c) return; haptic('light');
+            document.querySelectorAll('#ck-del .address-card').forEach(c=>c.classList.remove('selected'));
+            c.classList.add('selected'); delType = c.dataset.del;
+            const cost = delType==='courier'?300:0;
+            document.getElementById('ck-dcost').textContent = cost?formatPrice(cost):'Бесплатно';
+            document.getElementById('ck-total').textContent = formatPrice(parseFloat(g.current_price)+cost);
+        });
+
         document.getElementById('pay-btn')?.addEventListener('click', async () => {
+            if(!selAddr){showToast('Выберите адрес','error');return;}
             haptic('medium');
             const btn = document.getElementById('pay-btn'); btn.disabled=true; btn.textContent='Обработка...';
             try {
-                const orderData = {
-                    group_id: parseInt(groupId),
-                    delivery_type: delType,
-                    delivery_city: selectedCity,
-                    delivery_cost: deliveryCost
-                };
-                if(delType === 'pickup') {
-                    orderData.pvz_code = selectedPvz;
-                } else {
-                    orderData.address_id = selAddr;
-                }
-                const order = await api.orders.create(orderData);
+                const order = await api.orders.create({group_id:parseInt(groupId), address_id:selAddr, delivery_type:delType});
                 showToast('Заказ оформлен!','success'); haptic('success');
                 if(order.payment_url) window.open(order.payment_url,'_blank');
                 router.navigate(`order/${order.order_id || order.id}`);
             } catch(e) { btn.disabled=false; btn.textContent='💳 Оплатить'; showToast(e.message||'Ошибка','error'); haptic('error'); }
         });
-
-        // Инициализация: если город уже есть — рассчитать
-        if(selectedCity) {
-            calcDelivery(selectedCity);
-            if(delType === 'pickup') {
-                document.getElementById('ck-pvz-section').style.display = '';
-                loadPvzPoints(selectedCity);
-            }
-        }
     } catch(e) { console.error(e); showToast('Ошибка','error'); }
 }
 
@@ -762,16 +603,18 @@ export async function renderOrder(id) {
                 <div class="order-summary__total"><span>Итого</span><span>${formatPrice(o.total_amount)}</span></div>
             </div>
             ${o.can_cancel?`<div style="padding:16px var(--page-padding)"><button class="btn btn-outline btn-block" id="cancel-btn" style="color:var(--danger);border-color:var(--danger)">Отменить заказ</button></div>`:''}
-            ${o.status==='delivered'?`<div style="padding:0 var(--page-padding) 16px"><button class="btn btn-outline btn-block" id="return-btn" style="color:var(--warning);border-color:var(--warning)">🔄 Оформить возврат</button></div>`:''}
+            ${o.status === 'delivered' ? `<div style="padding:0 var(--page-padding) 16px"><button class="btn btn-outline btn-block" id="return-btn">🔄 Оформить возврат</button></div>` : ''}
         </div>`;
 
         document.getElementById('cancel-btn')?.addEventListener('click', async () => {
             if(!await showConfirm('Отменить заказ?')) return;
             try { await api.orders.cancel(id); showToast('Отменён','success'); renderOrder(id); } catch(e) { showToast(e.message||'Ошибка','error'); }
         });
+
+        // Кнопка возврата — открывает шторку с формой
         document.getElementById('return-btn')?.addEventListener('click', () => {
             haptic('light');
-            router.navigate(`return/create/${id}`);
+            showReturnForm(id);
         });
     } catch(e) { console.error(e); showToast('Ошибка','error'); }
 }
@@ -811,11 +654,13 @@ export async function renderProfile() {
         <div class="profile-menu">
             <a href="#orders" class="profile-menu__item"><span class="profile-menu__icon">📦</span><span class="profile-menu__text">Мои заказы</span><span class="profile-menu__arrow">›</span></a>
             <a href="#groups" class="profile-menu__item"><span class="profile-menu__icon">👥</span><span class="profile-menu__text">Мои сборы</span><span class="profile-menu__arrow">›</span></a>
-            <a href="#addresses" class="profile-menu__item"><span class="profile-menu__icon">📍</span><span class="profile-menu__text">Адреса доставки</span><span class="profile-menu__arrow">›</span></a>
             <a href="#returns" class="profile-menu__item"><span class="profile-menu__icon">🔄</span><span class="profile-menu__text">Мои возвраты</span><span class="profile-menu__arrow">›</span></a>
+            <a href="#addresses" class="profile-menu__item"><span class="profile-menu__icon">📍</span><span class="profile-menu__text">Адреса доставки</span><span class="profile-menu__arrow">›</span></a>
+            <div class="profile-menu__divider"></div>
             <a href="#notifications" class="profile-menu__item"><span class="profile-menu__icon">🔔</span><span class="profile-menu__text">Уведомления</span><span class="profile-menu__arrow">›</span></a>
             <a href="#support" class="profile-menu__item"><span class="profile-menu__icon">💬</span><span class="profile-menu__text">Поддержка</span><span class="profile-menu__arrow">›</span></a>
-            <a href="#faq" class="profile-menu__item"><span class="profile-menu__icon">❓</span><span class="profile-menu__text">Частые вопросы</span><span class="profile-menu__arrow">›</span></a>
+            <a href="#faq" class="profile-menu__item"><span class="profile-menu__icon">❓</span><span class="profile-menu__text">FAQ</span><span class="profile-menu__arrow">›</span></a>
+            <div class="profile-menu__divider"></div>
             <button class="profile-menu__item" id="stats-btn"><span class="profile-menu__icon">📊</span><span class="profile-menu__text">Статистика</span><span class="profile-menu__arrow">›</span></button>
         </div>
     </div>`;
@@ -977,249 +822,452 @@ function showAddrForm(existing=null) {
 
 
 // ============================================================
-// ВОЗВРАТЫ
+// ВОЗВРАТЫ — список
 // ============================================================
 
-const RETURN_REASONS = {
-    defect: '🔴 Брак / дефект',
-    wrong_size: '📏 Не подошёл размер',
-    not_as_described: '❓ Не соответствует описанию',
-    changed_mind: '💭 Передумал'
-};
-const RETURN_STATUS = {
-    pending: { text: 'На рассмотрении', emoji: '⏳', color: 'warning' },
-    approved: { text: 'Одобрен', emoji: '✅', color: 'success' },
-    rejected: { text: 'Отклонён', emoji: '❌', color: 'danger' },
-    awaiting_item: { text: 'Ожидает товар', emoji: '📬', color: 'accent' },
-    completed: { text: 'Завершён', emoji: '✔️', color: 'success' }
-};
+/**
+ * Статусы возвратов для UI.
+ * 
+ * Представь: заявка на возврат — это как посылка в обратную сторону.
+ * Сначала "На рассмотрении" (ждёт решения админа),
+ * потом "Одобрен" → "Ждём товар" → "Завершён" (деньги вернули).
+ * Или "Отклонён" — если причина не подходит.
+ */
+function returnStatusInfo(status) {
+    const info = {
+        pending:       { emoji: '🕐', text: 'На рассмотрении', color: 'warning' },
+        approved:      { emoji: '✅', text: 'Одобрен',         color: 'success' },
+        rejected:      { emoji: '❌', text: 'Отклонён',        color: 'danger' },
+        awaiting_item: { emoji: '📦', text: 'Ждём товар',      color: 'info' },
+        completed:     { emoji: '💰', text: 'Завершён',        color: 'success' },
+    };
+    return info[status] || { emoji: '❓', text: status, color: '' };
+}
+
+/**
+ * Причины возврата — человекопонятные названия.
+ */
+function returnReasonText(reason) {
+    const map = {
+        wrong_size:       'Не подошёл размер/цвет',
+        defect:           'Брак / дефект',
+        not_as_described: 'Не соответствует описанию',
+        changed_mind:     'Передумал(а)',
+    };
+    return map[reason] || reason;
+}
+
+/**
+ * Статусы тикетов поддержки.
+ */
+function ticketStatusInfo(status) {
+    const info = {
+        open:         { emoji: '🟢', text: 'Открыт',           color: 'success' },
+        in_progress:  { emoji: '🔄', text: 'В работе',         color: 'accent' },
+        waiting_user: { emoji: '💬', text: 'Ждёт вашего ответа', color: 'warning' },
+        closed:       { emoji: '✅', text: 'Закрыт',           color: '' },
+    };
+    return info[status] || { emoji: '❓', text: status, color: '' };
+}
+
 
 export async function renderReturns() {
     setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Мои возвраты</div></div><div style="padding:16px"><div class="skeleton" style="height:120px;border-radius:var(--radius-md);margin-bottom:8px"></div><div class="skeleton" style="height:120px;border-radius:var(--radius-md)"></div></div></div>';
-
-    try {
-        const res = await api.returns.list();
-        const items = res.items || res || [];
-
-        if (!items.length) {
-            app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Мои возвраты</div></div><div class="empty-state"><div class="empty-state__icon">🔄</div><div class="empty-state__title">Нет возвратов</div><div class="empty-state__text">Здесь будут ваши заявки на возврат</div></div></div>';
-            return;
-        }
-
-        app.innerHTML = `
-        <div class="page-enter">
-            <div class="topbar"><div class="topbar__title">Мои возвраты</div></div>
-            <div style="padding:0 var(--page-padding)">
-                ${items.map(r => {
-                    const st = RETURN_STATUS[r.status] || { text: r.status, emoji: '❓', color: 'accent' };
-                    return `<div class="order-card" style="cursor:pointer" onclick="location.hash='return/${r.id}'">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div><strong>Возврат #${r.id}</strong> <span style="color:var(--text-hint)">· Заказ #${r.order_id}</span></div>
-                            <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
-                        </div>
-                        <div style="margin-top:8px;font-size:0.9rem;color:var(--text-hint)">${RETURN_REASONS[r.reason] || r.reason}</div>
-                        <div style="margin-top:4px;font-size:0.85rem;color:var(--text-hint)">${formatDate(r.created_at)}</div>
-                    </div>`;
-                }).join('')}
-            </div>
-        </div>`;
-    } catch(e) { console.error(e); showToast('Ошибка загрузки','error'); }
-}
-
-export async function renderReturnCreate(orderId) {
-    setActiveNav(''); showBackButton(() => router.back()); hideMainButton();
-    const app = document.getElementById('app');
-
-    app.innerHTML = `
-    <div class="page-enter">
-        <div class="topbar"><div class="topbar__title">Оформить возврат</div></div>
-        <div style="padding:0 var(--page-padding)">
-            <div class="checkout-section">
-                <div class="checkout-section__title">Заказ #${orderId}</div>
-            </div>
-            <div class="checkout-section">
-                <div class="checkout-section__title">Причина возврата</div>
-                <div id="ret-reasons" style="display:flex;flex-direction:column;gap:8px">
-                    ${Object.entries(RETURN_REASONS).map(([k,v]) => `
-                        <div class="address-card" data-reason="${k}" style="cursor:pointer">
-                            <div class="address-card__text"><div class="address-card__title">${v}</div></div>
-                        </div>`).join('')}
-                </div>
-            </div>
-            <div class="checkout-section">
-                <div class="checkout-section__title">Опишите проблему</div>
-                <textarea class="form-input" id="ret-desc" rows="4" placeholder="Минимум 10 символов..." style="resize:vertical"></textarea>
-            </div>
-            <button class="btn btn-primary btn-block btn-lg" id="ret-submit" disabled>Отправить заявку</button>
+    app.innerHTML = `<div class="page-enter">
+        <div class="topbar"><div class="topbar__title">Мои возвраты</div></div>
+        <div id="ret-list" style="padding-bottom:16px">
+            ${Array(2).fill('<div class="order-card"><div class="skeleton" style="height:80px"></div></div>').join('')}
         </div>
     </div>`;
 
-    let selReason = null;
-    document.getElementById('ret-reasons')?.addEventListener('click', e => {
-        const c = e.target.closest('[data-reason]'); if(!c) return; haptic('light');
-        document.querySelectorAll('#ret-reasons .address-card').forEach(c=>c.classList.remove('selected'));
-        c.classList.add('selected'); selReason = c.dataset.reason;
-        checkRetForm();
-    });
-    const descEl = document.getElementById('ret-desc');
-    descEl?.addEventListener('input', checkRetForm);
-    function checkRetForm() {
-        const btn = document.getElementById('ret-submit');
-        if(btn) btn.disabled = !selReason || (descEl?.value?.trim()?.length || 0) < 10;
+    try {
+        const r = await api.returns.list();
+        const items = r.items || r || [];
+        const el = document.getElementById('ret-list'); if (!el) return;
+
+        if (!items.length) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="empty-state__icon">🔄</div>
+                <div class="empty-state__title">Возвратов нет</div>
+                <div class="empty-state__text">Здесь появятся ваши заявки на возврат</div>
+            </div>`;
+            return;
+        }
+
+        el.innerHTML = items.map(ret => {
+            const st = returnStatusInfo(ret.status);
+            return `<a href="#return/${ret.id}" class="order-card" style="display:block;text-decoration:none;color:var(--text)">
+                <div class="order-card__header">
+                    <span class="order-card__number">Возврат #${ret.id}</span>
+                    <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
+                </div>
+                <div class="order-card__product">
+                    <div class="order-card__info">
+                        <div class="order-card__name">${escapeHtml(ret.product_name || 'Заказ #' + ret.order_id)}</div>
+                        <div style="font-size:0.85rem;color:var(--text-hint)">${returnReasonText(ret.reason)}</div>
+                    </div>
+                </div>
+                <div class="order-card__footer">
+                    <span>${formatDate(ret.created_at, 'relative')}</span>
+                    ${ret.refund_amount ? `<span class="text-success">${formatPrice(ret.refund_amount)}</span>` : ''}
+                </div>
+            </a>`;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        document.getElementById('ret-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
     }
-    document.getElementById('ret-submit')?.addEventListener('click', async () => {
-        const btn = document.getElementById('ret-submit'); btn.disabled = true; btn.textContent = 'Отправка...';
+}
+
+
+// ============================================================
+// ВОЗВРАТ — детали
+// ============================================================
+
+export async function renderReturn(id) {
+    setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
+    const app = document.getElementById('app');
+    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Возврат #' + id + '</div></div><div style="padding:16px"><div class="skeleton" style="height:200px;border-radius:var(--radius-lg)"></div></div></div>';
+
+    try {
+        const ret = await api.returns.get(id);
+        if (!ret) { showToast('Не найден', 'error'); router.back(); return; }
+        const st = returnStatusInfo(ret.status);
+
+        // Таймлайн возврата
+        const steps = ['pending', 'approved', 'awaiting_item', 'completed'];
+        const isRejected = ret.status === 'rejected';
+        const curIdx = steps.indexOf(ret.status);
+
+        app.innerHTML = `
+        <div class="page-enter">
+            <div class="topbar">
+                <div class="topbar__title">Возврат #${ret.id}</div>
+                <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
+            </div>
+
+            <div class="checkout-section">
+                <div class="checkout-section__title">Товар</div>
+                <div class="order-card__product">
+                    <div class="order-card__img">${ret.product_image ? `<img src="${escapeHtml(ret.product_image)}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-sm)">` : ''}</div>
+                    <div class="order-card__info">
+                        <div class="order-card__name">${escapeHtml(ret.product_name || 'Заказ #' + ret.order_id)}</div>
+                        ${ret.refund_amount ? `<div class="order-card__price">${formatPrice(ret.refund_amount)}</div>` : ''}
+                    </div>
+                </div>
+            </div>
+
+            <div class="checkout-section">
+                <div class="checkout-section__title">Причина</div>
+                <div style="padding:0 var(--page-padding)">
+                    <div style="font-weight:600;margin-bottom:4px">${returnReasonText(ret.reason)}</div>
+                    ${ret.description ? `<div style="font-size:0.9rem;color:var(--text-secondary)">${escapeHtml(ret.description)}</div>` : ''}
+                </div>
+            </div>
+
+            ${!isRejected ? `
+            <div class="checkout-section">
+                <div class="checkout-section__title">Прогресс</div>
+                <div class="timeline">${steps.map((s, i) => {
+                    const inf = returnStatusInfo(s);
+                    return `<div class="timeline__item ${i < curIdx ? 'completed' : ''} ${i === curIdx ? 'active' : ''}">
+                        <div class="timeline__dot">${i < curIdx ? '✓' : i === curIdx ? inf.emoji : ''}</div>
+                        <div class="timeline__content"><div class="timeline__title">${inf.text}</div></div>
+                    </div>`;
+                }).join('')}</div>
+            </div>` : `
+            <div class="checkout-section">
+                <div style="padding:16px var(--page-padding);text-align:center">
+                    <div style="font-size:2rem;margin-bottom:8px">❌</div>
+                    <div style="font-weight:600;margin-bottom:4px">Заявка отклонена</div>
+                    ${ret.admin_comment ? `<div style="font-size:0.9rem;color:var(--text-hint)">${escapeHtml(ret.admin_comment)}</div>` : ''}
+                </div>
+            </div>`}
+
+            ${ret.status === 'pending' ? `
+            <div style="padding:16px var(--page-padding)">
+                <button class="btn btn-outline btn-block" id="cancel-ret-btn" style="color:var(--danger);border-color:var(--danger)">Отменить заявку</button>
+            </div>` : ''}
+        </div>`;
+
+        document.getElementById('cancel-ret-btn')?.addEventListener('click', async () => {
+            if (!await showConfirm('Отменить заявку на возврат?')) return;
+            try {
+                await api.returns.cancel(id);
+                showToast('Заявка отменена', 'success');
+                router.navigate('returns');
+            } catch (e) { showToast(e.message || 'Ошибка', 'error'); }
+        });
+    } catch (e) { console.error(e); showToast('Ошибка', 'error'); }
+}
+
+
+// ============================================================
+// СОЗДАНИЕ ВОЗВРАТА — форма (вызывается из заказа)
+// ============================================================
+
+/**
+ * Показывает шторку для оформления возврата.
+ *
+ * Представь: пользователь открыл заказ со статусом "Доставлен",
+ * нажал "Оформить возврат" → внизу выезжает форма:
+ *   1. Выбор причины (выпадающий список)
+ *   2. Описание проблемы (текстовое поле)
+ *   3. Кнопка "Отправить"
+ */
+function showReturnForm(orderId) {
+    const s = showSheet('🔄 Оформить возврат', `
+        <div class="input-group">
+            <label>Причина возврата</label>
+            <select class="input" id="ret-reason">
+                <option value="">— Выберите —</option>
+                <option value="wrong_size">Не подошёл размер/цвет</option>
+                <option value="defect">Брак / дефект</option>
+                <option value="not_as_described">Не соответствует описанию</option>
+                <option value="changed_mind">Передумал(а)</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>Опишите проблему</label>
+            <textarea class="input" id="ret-desc" rows="3" placeholder="Расскажите, что не так с товаром..."></textarea>
+        </div>
+        <button class="btn btn-primary btn-block" id="ret-submit" style="margin-top:12px">Отправить заявку</button>
+    `);
+
+    s.element.querySelector('#ret-submit')?.addEventListener('click', async () => {
+        const reason = s.element.querySelector('#ret-reason').value;
+        const description = s.element.querySelector('#ret-desc').value.trim();
+
+        if (!reason) { showToast('Выберите причину', 'error'); return; }
+        if (!description) { showToast('Опишите проблему', 'error'); return; }
+
+        const btn = s.element.querySelector('#ret-submit');
+        btn.disabled = true; btn.textContent = 'Отправка...';
+
         try {
-            await api.returns.create({ order_id: parseInt(orderId), reason: selReason, description: descEl.value.trim() });
-            showToast('Заявка отправлена!','success'); haptic('success');
-            router.navigate('returns');
-        } catch(e) { btn.disabled = false; btn.textContent = 'Отправить заявку'; showToast(e.message||'Ошибка','error'); }
+            const result = await api.returns.create({ order_id: parseInt(orderId), reason, description });
+            showToast('Заявка создана!', 'success');
+            haptic('success');
+            s.close();
+            router.navigate(`return/${result.return_id || result.id}`);
+        } catch (e) {
+            showToast(e.message || 'Ошибка', 'error');
+            btn.disabled = false; btn.textContent = 'Отправить заявку';
+        }
     });
 }
 
 
 // ============================================================
-// ПОДДЕРЖКА
+// ПОДДЕРЖКА — список тикетов
 // ============================================================
-
-const SUPPORT_CATS = {
-    delivery: '🚚 Доставка', payment: '💳 Оплата', product: '📦 Товар',
-    order: '📋 Заказ', 'return': '🔄 Возврат', account: '👤 Аккаунт', other: '❓ Другое'
-};
-const TICKET_STATUS = {
-    open: { text: 'Открыто', color: 'danger' }, in_progress: { text: 'В работе', color: 'warning' },
-    waiting_user: { text: 'Ожидает ответа', color: 'accent' }, closed: { text: 'Закрыто', color: 'success' }
-};
 
 export async function renderSupport() {
     setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Поддержка</div></div><div style="padding:16px"><div class="skeleton" style="height:80px;border-radius:var(--radius-md);margin-bottom:8px"></div></div></div>';
+    app.innerHTML = `<div class="page-enter">
+        <div class="topbar">
+            <div class="topbar__title">Поддержка</div>
+            <button class="btn btn-sm btn-primary" id="new-ticket-btn" style="font-size:0.8rem;padding:6px 14px">+ Обращение</button>
+        </div>
+        <div id="sup-list" style="padding-bottom:16px">
+            ${Array(2).fill('<div class="order-card"><div class="skeleton" style="height:70px"></div></div>').join('')}
+        </div>
+    </div>`;
+
+    document.getElementById('new-ticket-btn')?.addEventListener('click', () => {
+        haptic('light'); router.navigate('support/create');
+    });
 
     try {
-        const res = await api.support.list();
-        const items = res.items || res || [];
+        const r = await api.support.list();
+        const items = r.items || r || [];
+        const el = document.getElementById('sup-list'); if (!el) return;
 
-        app.innerHTML = `
-        <div class="page-enter">
-            <div class="topbar"><div class="topbar__title">Поддержка</div></div>
-            <div style="padding:0 var(--page-padding)">
-                <button class="btn btn-primary btn-block" onclick="location.hash='support/create'" style="margin-bottom:16px">💬 Новое обращение</button>
-                ${!items.length ? '<div class="empty-state"><div class="empty-state__icon">💬</div><div class="empty-state__title">Нет обращений</div></div>' :
-                items.map(t => {
-                    const st = TICKET_STATUS[t.status] || { text: t.status, color: 'accent' };
-                    const cat = SUPPORT_CATS[t.category] || t.category;
-                    const lastMsg = t.last_message || t.message || '';
-                    return `<div class="order-card" style="cursor:pointer" onclick="location.hash='support/${t.id}'">
-                        <div style="display:flex;justify-content:space-between;align-items:center">
-                            <div><strong>${cat}</strong></div>
-                            <span class="badge badge-${st.color}">${st.text}</span>
-                        </div>
-                        <div style="margin-top:6px;font-size:0.9rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(lastMsg.substring(0,60))}</div>
-                        <div style="margin-top:4px;font-size:0.85rem;color:var(--text-hint)">${formatDate(t.created_at)}</div>
-                    </div>`;
-                }).join('')}
-            </div>
-        </div>`;
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+        if (!items.length) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="empty-state__icon">💬</div>
+                <div class="empty-state__title">Обращений нет</div>
+                <div class="empty-state__text">Если есть вопрос — напишите нам!</div>
+                <button class="btn btn-primary" onclick="location.hash='support/create'">Написать</button>
+            </div>`;
+            return;
+        }
+
+        el.innerHTML = items.map(t => {
+            const st = ticketStatusInfo(t.status);
+            return `<a href="#support/${t.id}" class="order-card" style="display:block;text-decoration:none;color:var(--text)">
+                <div class="order-card__header">
+                    <span class="order-card__number">${escapeHtml(t.category_display || t.category)}</span>
+                    <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
+                </div>
+                <div style="padding:0 16px 8px">
+                    <div style="font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.last_message || t.message || '')}</div>
+                </div>
+                <div class="order-card__footer">
+                    <span>${formatDate(t.updated_at || t.created_at, 'relative')}</span>
+                    ${t.unread_count ? `<span class="badge badge-accent">${t.unread_count} новых</span>` : ''}
+                </div>
+            </a>`;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        document.getElementById('sup-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+    }
 }
 
+
+// ============================================================
+// ПОДДЕРЖКА — создание обращения
+// ============================================================
+
 export async function renderSupportCreate() {
-    setActiveNav(''); showBackButton(() => router.back()); hideMainButton();
+    setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
 
     app.innerHTML = `
     <div class="page-enter">
         <div class="topbar"><div class="topbar__title">Новое обращение</div></div>
-        <div style="padding:0 var(--page-padding)">
-            <div class="checkout-section">
-                <div class="checkout-section__title">Категория</div>
-                <div id="sup-cats" style="display:flex;flex-wrap:wrap;gap:8px">
-                    ${Object.entries(SUPPORT_CATS).map(([k,v]) => `<button class="category-chip" data-cat="${k}">${v}</button>`).join('')}
-                </div>
+        <div style="padding:16px var(--page-padding)">
+            <div class="input-group">
+                <label>Тема обращения</label>
+                <select class="input" id="sc-cat">
+                    <option value="">— Выберите —</option>
+                    <option value="delivery">🚚 Доставка</option>
+                    <option value="payment">💳 Оплата</option>
+                    <option value="product">📦 Товар</option>
+                    <option value="order">📋 Заказ</option>
+                    <option value="return">🔄 Возврат</option>
+                    <option value="account">👤 Аккаунт</option>
+                    <option value="other">❓ Другое</option>
+                </select>
             </div>
-            <div class="checkout-section">
-                <div class="checkout-section__title">Сообщение</div>
-                <textarea class="form-input" id="sup-msg" rows="5" placeholder="Опишите вашу проблему (мин. 10 символов)..." style="resize:vertical"></textarea>
+            <div class="input-group">
+                <label>Номер заказа <span style="color:var(--text-hint)">(если есть)</span></label>
+                <input class="input" id="sc-order" type="number" placeholder="Например: 42">
             </div>
-            <button class="btn btn-primary btn-block btn-lg" id="sup-submit" disabled>Отправить</button>
+            <div class="input-group">
+                <label>Сообщение</label>
+                <textarea class="input" id="sc-msg" rows="4" placeholder="Опишите вашу проблему или вопрос..."></textarea>
+            </div>
+            <button class="btn btn-primary btn-block btn-lg" id="sc-submit">Отправить</button>
         </div>
     </div>`;
 
-    let selCat = null;
-    document.getElementById('sup-cats')?.addEventListener('click', e => {
-        const c = e.target.closest('[data-cat]'); if(!c) return; haptic('light');
-        document.querySelectorAll('#sup-cats .category-chip').forEach(c=>c.classList.remove('active'));
-        c.classList.add('active'); selCat = c.dataset.cat;
-        checkSupForm();
-    });
-    const msgEl = document.getElementById('sup-msg');
-    msgEl?.addEventListener('input', checkSupForm);
-    function checkSupForm() {
-        const btn = document.getElementById('sup-submit');
-        if(btn) btn.disabled = !selCat || (msgEl?.value?.trim()?.length || 0) < 10;
-    }
-    document.getElementById('sup-submit')?.addEventListener('click', async () => {
-        const btn = document.getElementById('sup-submit'); btn.disabled = true; btn.textContent = 'Отправка...';
+    document.getElementById('sc-submit')?.addEventListener('click', async () => {
+        const category = document.getElementById('sc-cat').value;
+        const message = document.getElementById('sc-msg').value.trim();
+        const orderId = document.getElementById('sc-order').value.trim();
+
+        if (!category) { showToast('Выберите тему', 'error'); return; }
+        if (!message) { showToast('Напишите сообщение', 'error'); return; }
+
+        const btn = document.getElementById('sc-submit');
+        btn.disabled = true; btn.textContent = 'Отправка...';
+
         try {
-            const ticket = await api.support.create({ category: selCat, message: msgEl.value.trim() });
-            showToast('Обращение создано!','success'); haptic('success');
-            router.navigate(`support/${ticket.id || ticket.ticket_id}`);
-        } catch(e) { btn.disabled = false; btn.textContent = 'Отправить'; showToast(e.message||'Ошибка','error'); }
+            const d = { category, message };
+            if (orderId) d.order_id = parseInt(orderId);
+            const result = await api.support.create(d);
+            showToast('Обращение создано!', 'success');
+            haptic('success');
+            router.navigate(`support/${result.ticket_id || result.id}`);
+        } catch (e) {
+            showToast(e.message || 'Ошибка', 'error');
+            btn.disabled = false; btn.textContent = 'Отправить';
+        }
     });
 }
 
+
+// ============================================================
+// ПОДДЕРЖКА — переписка (чат с поддержкой)
+// ============================================================
+
+/**
+ * Чат с поддержкой — как мессенджер:
+ * - Сообщения пользователя справа (синие)
+ * - Ответы поддержки слева (серые)
+ * - Внизу поле ввода + кнопка отправки
+ */
 export async function renderSupportTicket(id) {
-    setActiveNav(''); showBackButton(() => router.back()); hideMainButton();
+    setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Обращение #'+id+'</div></div><div style="padding:16px"><div class="skeleton" style="height:200px;border-radius:var(--radius-md)"></div></div></div>';
+    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Обращение</div></div><div style="padding:16px"><div class="skeleton" style="height:200px;border-radius:var(--radius-lg)"></div></div></div>';
 
     try {
         const t = await api.support.get(id);
-        if(!t) { showToast('Не найдено','error'); router.back(); return; }
-        const msgs = t.messages || [];
-        const st = TICKET_STATUS[t.status] || { text: t.status, color: 'accent' };
+        if (!t) { showToast('Не найден', 'error'); router.back(); return; }
+        const st = ticketStatusInfo(t.status);
+        const messages = t.messages || [];
         const isClosed = t.status === 'closed';
 
         app.innerHTML = `
-        <div class="page-enter" style="padding-bottom:${isClosed?'16px':'80px'}">
-            <div class="topbar"><div class="topbar__title">${SUPPORT_CATS[t.category]||t.category}</div><span class="badge badge-${st.color}">${st.text}</span></div>
-            <div class="chat-messages" id="chat-msgs">
-                ${msgs.map(m => `
-                    <div class="chat-msg ${m.sender_type==='user'?'chat-msg--user':'chat-msg--support'}">
-                        <div class="chat-msg__bubble">${escapeHtml(m.text)}</div>
-                        <div class="chat-msg__time">${m.created_at ? formatDate(m.created_at) : ''}</div>
-                    </div>`).join('')}
-                ${!msgs.length ? '<div style="text-align:center;padding:32px;color:var(--text-hint)">Начало переписки</div>' : ''}
+        <div class="page-enter" style="padding-bottom:${isClosed ? '16px' : '76px'}">
+            <div class="topbar">
+                <div>
+                    <div class="topbar__title">${escapeHtml(t.category_display || t.category)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-hint)">#${t.id}</div>
+                </div>
+                <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
             </div>
+
+            <div class="chat-messages" id="chat-msgs">
+                ${messages.map(m => `
+                    <div class="chat-msg ${m.sender === 'user' ? 'chat-msg--user' : 'chat-msg--support'}">
+                        <div class="chat-msg__bubble">${escapeHtml(m.text)}</div>
+                        <div class="chat-msg__time">${formatDate(m.timestamp || m.created_at, 'datetime')}</div>
+                    </div>
+                `).join('')}
+                ${!messages.length ? '<div style="text-align:center;padding:24px;color:var(--text-hint)">Начало переписки</div>' : ''}
+            </div>
+
             ${!isClosed ? `
-            <div class="chat-input-bar">
-                <input type="text" class="form-input" id="chat-input" placeholder="Написать..." style="flex:1">
-                <button class="btn btn-primary" id="chat-send">➤</button>
-            </div>` : '<div style="text-align:center;padding:16px;color:var(--text-hint)">Обращение закрыто</div>'}
+            <div class="chat-input-bar" id="chat-bar">
+                <input class="input chat-input" id="chat-input" placeholder="Ваше сообщение..." autocomplete="off">
+                <button class="btn btn-primary chat-send-btn" id="chat-send">→</button>
+            </div>` : `
+            <div style="text-align:center;padding:16px;color:var(--text-hint);font-size:0.85rem">
+                ✅ Обращение закрыто
+            </div>`}
         </div>`;
 
-        // Скролл вниз
+        // Скроллим чат вниз
         const chatEl = document.getElementById('chat-msgs');
-        if(chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+        if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
 
-        if(!isClosed) {
+        // Отправка сообщения
+        const sendMsg = async () => {
             const input = document.getElementById('chat-input');
-            const send = async () => {
-                const text = input?.value?.trim();
-                if(!text) return;
-                input.value = '';
-                try {
-                    await api.support.sendMessage(id, text);
-                    renderSupportTicket(id);
-                } catch(e) { showToast(e.message||'Ошибка','error'); }
-            };
-            document.getElementById('chat-send')?.addEventListener('click', send);
-            input?.addEventListener('keydown', e => { if(e.key === 'Enter') send(); });
-        }
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+            const text = input?.value.trim();
+            if (!text) return;
+
+            input.value = '';
+            const chatMsgs = document.getElementById('chat-msgs');
+
+            // Оптимистично добавляем сообщение (мгновенно)
+            const msgEl = document.createElement('div');
+            msgEl.className = 'chat-msg chat-msg--user';
+            msgEl.innerHTML = `<div class="chat-msg__bubble">${escapeHtml(text)}</div><div class="chat-msg__time">только что</div>`;
+            chatMsgs?.appendChild(msgEl);
+            chatMsgs.scrollTop = chatMsgs.scrollHeight;
+
+            try {
+                await api.support.sendMessage(id, text);
+                haptic('light');
+            } catch (e) {
+                msgEl.querySelector('.chat-msg__bubble').style.opacity = '0.5';
+                showToast('Не удалось отправить', 'error');
+            }
+        };
+
+        document.getElementById('chat-send')?.addEventListener('click', sendMsg);
+        document.getElementById('chat-input')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
+        });
+
+    } catch (e) { console.error(e); showToast('Ошибка', 'error'); }
 }
 
 
@@ -1227,105 +1275,204 @@ export async function renderSupportTicket(id) {
 // УВЕДОМЛЕНИЯ
 // ============================================================
 
-const NOTIF_ICONS = {
-    group_joined: '👥', group_completed: '🎉', group_failed: '😔',
-    order_paid: '💳', order_shipped: '🚚', order_delivered: '✅',
-    price_drop: '📉', level_up: '⬆️', referral_bonus: '🎁',
-    return_approved: '✅', return_rejected: '❌', support_reply: '💬'
-};
+/**
+ * Типы уведомлений — иконки для визуального различия.
+ *
+ * Представь: уведомление — это как SMS от магазина.
+ * По иконке сразу видно о чём: оплата, доставка, акция и т.д.
+ */
+function notifIcon(type) {
+    const icons = {
+        payment:  '💳',
+        order:    '📦',
+        group:    '👥',
+        delivery: '🚚',
+        return:   '🔄',
+        support:  '💬',
+        promo:    '🎉',
+        system:   'ℹ️',
+    };
+    return icons[type] || '🔔';
+}
 
 export async function renderNotifications() {
     setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Уведомления</div></div><div style="padding:16px"><div class="skeleton" style="height:60px;border-radius:var(--radius-md);margin-bottom:8px"></div><div class="skeleton" style="height:60px;border-radius:var(--radius-md);margin-bottom:8px"></div><div class="skeleton" style="height:60px;border-radius:var(--radius-md)"></div></div></div>';
+    app.innerHTML = `<div class="page-enter">
+        <div class="topbar">
+            <div class="topbar__title">Уведомления</div>
+            <button class="btn btn-sm btn-secondary" id="mark-all-btn" style="font-size:0.8rem;padding:6px 12px">Прочитать все</button>
+        </div>
+        <div id="notif-list" style="padding-bottom:16px">
+            ${Array(3).fill('<div class="order-card"><div class="skeleton" style="height:60px"></div></div>').join('')}
+        </div>
+    </div>`;
+
+    document.getElementById('mark-all-btn')?.addEventListener('click', async () => {
+        try {
+            await api.notifications.markAllRead();
+            showToast('Все прочитаны', 'success');
+            // Обновляем бейдж
+            updateNotifBadge(0);
+            // Убираем выделение непрочитанных
+            document.querySelectorAll('.notif-item--unread').forEach(el => el.classList.remove('notif-item--unread'));
+        } catch (e) { showToast('Ошибка', 'error'); }
+    });
 
     try {
-        const res = await api.notifications.list();
-        const items = res.items || res || [];
-        const unread = items.filter(n => !n.is_read).length;
+        const r = await api.notifications.list({ limit: 50 });
+        const items = r.items || r || [];
+        const el = document.getElementById('notif-list'); if (!el) return;
 
-        app.innerHTML = `
-        <div class="page-enter">
-            <div class="topbar">
-                <div class="topbar__title">Уведомления</div>
-                ${unread > 0 ? `<button class="btn btn-sm btn-secondary" id="notif-readall">Прочитать все</button>` : ''}
+        if (!items.length) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="empty-state__icon">🔔</div>
+                <div class="empty-state__title">Пока тихо</div>
+                <div class="empty-state__text">Здесь будут уведомления о заказах, сборах и акциях</div>
+            </div>`;
+            return;
+        }
+
+        el.innerHTML = items.map(n => `
+            <div class="notif-item ${!n.is_read ? 'notif-item--unread' : ''}" data-nid="${n.id}" ${n.link ? `onclick="location.hash='${escapeHtml(n.link)}'"` : ''} style="cursor:${n.link ? 'pointer' : 'default'}">
+                <div class="notif-item__icon">${notifIcon(n.type)}</div>
+                <div class="notif-item__body">
+                    <div class="notif-item__title">${escapeHtml(n.title)}</div>
+                    <div class="notif-item__text">${escapeHtml(n.message || n.body || '')}</div>
+                    <div class="notif-item__time">${formatDate(n.created_at, 'relative')}</div>
+                </div>
+                ${!n.is_read ? '<div class="notif-item__dot"></div>' : ''}
             </div>
-            <div style="padding:0 var(--page-padding)">
-                ${!items.length ? '<div class="empty-state"><div class="empty-state__icon">🔔</div><div class="empty-state__title">Нет уведомлений</div></div>' :
-                items.map(n => `
-                    <div class="notif-item ${n.is_read?'':'notif-item--unread'}" data-nid="${n.id}">
-                        <div class="notif-item__icon">${NOTIF_ICONS[n.type] || '🔔'}</div>
-                        <div class="notif-item__content">
-                            <div class="notif-item__title">${escapeHtml(n.title || n.type)}</div>
-                            <div class="notif-item__text">${escapeHtml(n.message || '')}</div>
-                            <div class="notif-item__time">${formatDate(n.created_at)}</div>
-                        </div>
-                    </div>`).join('')}
-            </div>
-        </div>`;
+        `).join('');
 
-        document.getElementById('notif-readall')?.addEventListener('click', async () => {
-            try { await api.notifications.markAllRead(); showToast('Прочитано','success'); renderNotifications(); } catch(e) {}
-        });
-
-        // Клик по уведомлению — пометить прочитанным
-        document.querySelectorAll('.notif-item[data-nid]').forEach(el => {
-            el.addEventListener('click', async () => {
-                const nid = el.dataset.nid;
-                if(el.classList.contains('notif-item--unread')) {
-                    try { await api.notifications.markRead(nid); } catch(e) {}
-                    el.classList.remove('notif-item--unread');
-                }
+        // Отмечаем как прочитанное при клике
+        el.querySelectorAll('.notif-item--unread').forEach(item => {
+            item.addEventListener('click', async () => {
+                const nid = item.dataset.nid;
+                try {
+                    await api.notifications.markRead(nid);
+                    item.classList.remove('notif-item--unread');
+                    item.querySelector('.notif-item__dot')?.remove();
+                } catch (e) { /* молча */ }
             });
         });
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+    } catch (e) {
+        console.error(e);
+        document.getElementById('notif-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+    }
 }
 
 
 // ============================================================
-// FAQ
+// FAQ — Часто задаваемые вопросы
 // ============================================================
 
+/**
+ * FAQ — как аккордеон: нажал на вопрос — раскрылся ответ.
+ * Вопросы сгруппированы по категориям (Оплата, Доставка и т.д.)
+ */
 export async function renderFAQ() {
     setActiveNav('profile'); showBackButton(() => router.back()); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Частые вопросы</div></div><div style="padding:16px"><div class="skeleton" style="height:60px;border-radius:var(--radius-md);margin-bottom:8px"></div><div class="skeleton" style="height:60px;border-radius:var(--radius-md);margin-bottom:8px"></div></div></div>';
+    app.innerHTML = `<div class="page-enter">
+        <div class="topbar"><div class="topbar__title">FAQ</div></div>
+        <div id="faq-list" style="padding:8px var(--page-padding) 16px">
+            <div class="skeleton" style="height:200px;border-radius:var(--radius-md)"></div>
+        </div>
+    </div>`;
 
     try {
-        const res = await api.support.faq();
-        const items = res.items || res || [];
+        const r = await api.support.faq();
+        const data = r.data || r || {};
+        const el = document.getElementById('faq-list'); if (!el) return;
 
-        if(!items.length) {
-            app.innerHTML = '<div class="page-enter"><div class="topbar"><div class="topbar__title">Частые вопросы</div></div><div class="empty-state"><div class="empty-state__icon">❓</div><div class="empty-state__title">Скоро появятся</div></div></div>';
+        const categories = Object.entries(data);
+        if (!categories.length) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="empty-state__icon">📚</div>
+                <div class="empty-state__title">FAQ пока пуст</div>
+                <div class="empty-state__text">Скоро здесь появятся ответы на частые вопросы</div>
+            </div>`;
             return;
         }
 
-        // Группируем по категориям
-        const grouped = {};
-        items.forEach(f => {
-            const cat = f.category || 'other';
-            if(!grouped[cat]) grouped[cat] = [];
-            grouped[cat].push(f);
-        });
-
-        app.innerHTML = `
-        <div class="page-enter">
-            <div class="topbar"><div class="topbar__title">Частые вопросы</div></div>
-            <div style="padding:0 var(--page-padding)">
-                ${Object.entries(grouped).map(([cat, faqs]) => `
-                    <div style="margin-bottom:16px">
-                        <div style="font-weight:700;margin-bottom:8px;font-size:0.95rem">${SUPPORT_CATS[cat] || cat}</div>
-                        ${faqs.map(f => `
-                            <div class="faq-item">
-                                <div class="faq-item__q" onclick="this.parentElement.classList.toggle('open')">${escapeHtml(f.question)}<span class="faq-item__arrow">›</span></div>
-                                <div class="faq-item__a">${escapeHtml(f.answer)}</div>
-                            </div>`).join('')}
-                    </div>`).join('')}
-                <div style="text-align:center;padding:24px">
-                    <div style="color:var(--text-hint);margin-bottom:12px">Не нашли ответ?</div>
-                    <button class="btn btn-primary" onclick="location.hash='support/create'">💬 Написать в поддержку</button>
-                </div>
+        el.innerHTML = categories.map(([cat, questions]) => `
+            <div style="margin-bottom:16px">
+                <div style="font-weight:700;font-size:1rem;margin-bottom:8px;padding:4px 0">${escapeHtml(cat)}</div>
+                ${questions.map((q, i) => `
+                    <div class="faq-item">
+                        <button class="faq-item__question" data-faq="${cat}-${i}">
+                            <span>${escapeHtml(q.question)}</span>
+                            <span class="faq-item__arrow">›</span>
+                        </button>
+                        <div class="faq-item__answer" id="faq-${cat}-${i}" style="display:none">
+                            ${escapeHtml(q.answer)}
+                        </div>
+                    </div>
+                `).join('')}
             </div>
-        </div>`;
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+        `).join('');
+
+        // Аккордеон — клик по вопросу раскрывает ответ
+        el.querySelectorAll('.faq-item__question').forEach(btn => {
+            btn.addEventListener('click', () => {
+                haptic('light');
+                const id = btn.dataset.faq;
+                const answer = document.getElementById('faq-' + id);
+                const arrow = btn.querySelector('.faq-item__arrow');
+                if (!answer) return;
+
+                const isOpen = answer.style.display !== 'none';
+                answer.style.display = isOpen ? 'none' : 'block';
+                if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)';
+            });
+        });
+    } catch (e) {
+        console.error(e);
+        document.getElementById('faq-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+    }
+}
+
+
+// ============================================================
+// БЕЙДЖ НЕПРОЧИТАННЫХ УВЕДОМЛЕНИЙ
+// ============================================================
+
+/**
+ * Обновляет бейдж (кружок с цифрой) на иконке профиля в навбаре.
+ * 
+ * Представь: как на иконке мессенджера — красный кружок с "3",
+ * значит 3 непрочитанных. Если 0 — кружок исчезает.
+ */
+export function updateNotifBadge(count) {
+    const profileNav = document.querySelector('.navbar__item[data-page="profile"]');
+    if (!profileNav) return;
+
+    // Удаляем старый бейдж
+    const oldBadge = profileNav.querySelector('.navbar__badge');
+    if (oldBadge) oldBadge.remove();
+
+    // Добавляем новый если есть непрочитанные
+    if (count > 0) {
+        profileNav.style.position = 'relative';
+        const badge = document.createElement('span');
+        badge.className = 'navbar__badge';
+        badge.textContent = count > 99 ? '99+' : count;
+        profileNav.appendChild(badge);
+    }
+}
+
+/**
+ * Загружает количество непрочитанных и обновляет бейдж.
+ * Вызывается при инициализации приложения.
+ */
+export async function loadNotifBadge() {
+    try {
+        const r = await api.notifications.unreadCount();
+        const count = r.count ?? r.unread_count ?? r ?? 0;
+        updateNotifBadge(typeof count === 'number' ? count : 0);
+    } catch (e) {
+        // Молча — бейдж не критичен
+        console.warn('Notif badge error:', e);
+    }
 }
