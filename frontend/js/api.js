@@ -199,6 +199,30 @@ const api = {
         settings: () => request('GET', '/api/notifications/settings'),
         updateSettings: (d) => request('PUT', '/api/notifications/settings', d),
     },
+
+    // ─── Аналитика ───
+    // Fire-and-forget: отправляем и забываем, не ждём ответа.
+    // Наглядно: как бросить письмо в почтовый ящик — кинул и пошёл.
+    analytics: {
+        track: (event, data = {}) => {
+            // Отправляем через navigator.sendBeacon (не блокирует UI)
+            // или обычным fetch если sendBeacon недоступен
+            const body = JSON.stringify({ event, data, ts: Date.now() });
+            try {
+                if (navigator.sendBeacon) {
+                    const blob = new Blob([body], { type: 'application/json' });
+                    navigator.sendBeacon(`${BASE_URL}/api/analytics/event`, blob);
+                } else {
+                    fetch(`${BASE_URL}/api/analytics/event`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                        body,
+                        keepalive: true
+                    }).catch(() => {});
+                }
+            } catch (e) { /* аналитика не должна ломать приложение */ }
+        },
+    },
 };
 
 function buildQuery(p) {

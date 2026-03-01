@@ -19,6 +19,7 @@ import {
     renderReturns, renderReturn,
     renderSupport, renderSupportCreate, renderSupportTicket,
     renderNotifications, renderFAQ,
+    renderPrivacy, renderTerms,
     loadNotifBadge, setAppState
 } from './pages.js?v=4';
 
@@ -69,7 +70,10 @@ async function init() {
         .on('support/create', () => renderSupportCreate())
         .on('support/:id', (p) => renderSupportTicket(p.id))
         .on('notifications', () => renderNotifications())
-        .on('faq', () => renderFAQ());
+        .on('faq', () => renderFAQ())
+        // Юридические страницы — Этап 3
+        .on('privacy', () => renderPrivacy())
+        .on('terms', () => renderTerms());
 
     // 5. Deep link
     const sp = getStartParam();

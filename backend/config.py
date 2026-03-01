@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     # Пример: https://groupbuy-app.up.railway.app
     TELEGRAM_WEBAPP_URL: str = "http://localhost:8000"
     
-    # Токен админ-бота (отдельный от основного!)
-    ADMIN_BOT_TOKEN: str = "8549743015:AAG71eqE7ZKb_vTZ94VcK0zfZ38Q5KMPyuQ"
+    # Токен админ-бота (из переменной окружения)
+    ADMIN_BOT_TOKEN: str = ""
     
     # ==================== БАЗА ДАННЫХ (SUPABASE) ====================
     # URL проекта Supabase
@@ -113,8 +113,6 @@ class Settings(BaseSettings):
     # Бонус организатора по умолчанию (процент)
     ORGANIZER_BONUS_PERCENT: float = 2.0
     
-    ADMIN_BOT_TOKEN: str = "8549743015:AAG71eqE7ZKb_vTZ94VcK0zfZ38Q5KMPyuQ"  # Токен админ-бота (отдельный от основного)
-
     class Config:
         """
         Конфигурация Pydantic для загрузки из .env файла.

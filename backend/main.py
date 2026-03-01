@@ -22,7 +22,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
-import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
@@ -76,43 +75,9 @@ async def lifespan(app: FastAPI):
     print(f"📚 Документация: http://{settings.HOST}:{settings.PORT}/docs")
     print("─" * 50)
     
-    # ===== CRON SCHEDULER =====
-    # Запускаем фоновые задачи для проверки просроченных сборов
-    async def background_scheduler():
-        """Фоновый планировщик: проверка сборов каждые 5 минут."""
-        await asyncio.sleep(30)  # Даём приложению стартовать
-        while True:
-            try:
-                from services.group_manager import get_group_manager
-                manager = get_group_manager()
-                
-                # 1. Проверяем просроченные сборы
-                results = await manager.check_expired_groups()
-                if results:
-                    print(f"⏰ Cron: обработано {len(results)} просроченных сборов")
-                
-                # 2. Обрабатываем завершённые сборы (списание/возврат денег)
-                # Импортируем и вызываем если модуль существует
-                try:
-                    from cron.process_completed_groups import main as process_completed
-                    await process_completed()
-                except ImportError:
-                    pass
-                except Exception as e:
-                    print(f"⚠️  Cron process_completed: {e}")
-                    
-            except Exception as e:
-                print(f"⚠️  Cron ошибка: {e}")
-            
-            await asyncio.sleep(300)  # Каждые 5 минут
-    
-    scheduler_task = asyncio.create_task(background_scheduler())
-    print("⏰ Cron scheduler запущен (каждые 5 мин)")
-    
     yield  # Приложение работает
     
     # ===== SHUTDOWN =====
-    scheduler_task.cancel()
     print("👋 Остановка приложения...")
     # Здесь можно закрыть соединения, сохранить состояние и т.д.
 
@@ -141,9 +106,10 @@ app = FastAPI(
     Передавайте в заголовке: `Authorization: Bearer <token>`
     """,
     version="1.0.0",
-    docs_url="/docs",           # Swagger UI
-    redoc_url="/redoc",         # ReDoc
-    openapi_url="/openapi.json",
+    # В production отключаем документацию — чтобы не светить API наружу
+    docs_url="/docs" if is_development() else None,
+    redoc_url="/redoc" if is_development() else None,
+    openapi_url="/openapi.json" if is_development() else None,
     lifespan=lifespan
 )
 
@@ -153,13 +119,22 @@ app = FastAPI(
 # ============================================================
 
 # CORS — разрешаем запросы с фронтенда
+# 
+# Наглядно: CORS — это как "список пропусков" на вход.
+# В dev: пускаем всех ("*") — удобно для тестирования.
+# В prod: только Telegram и наш домен — для безопасности.
+#
+# Telegram Mini App загружается через несколько доменов:
+# - web.telegram.org — веб-версия
+# - t.me — мобильная ссылка
+# - наш домен — когда API и фронтенд на одном сервере
 app.add_middleware(
     CORSMiddleware,
-    # В production укажи конкретные домены:
-    # allow_origins=["https://твой-домен.com", "https://t.me"]
     allow_origins=["*"] if is_development() else [
         settings.TELEGRAM_WEBAPP_URL,
         "https://web.telegram.org",
+        "https://webk.telegram.org",
+        "https://webz.telegram.org",
         "https://t.me"
     ],
     allow_credentials=True,
@@ -284,6 +259,7 @@ async def get_config():
 
 #from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
 from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
+from routers import analytics
 
 app.include_router(users.router)
 app.include_router(products.router)
@@ -294,6 +270,7 @@ app.include_router(delivery.router)
 app.include_router(returns.router)
 app.include_router(support.router)
 app.include_router(notifications.router)
+app.include_router(analytics.router)
 
 
 # ============================================================
