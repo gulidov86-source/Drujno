@@ -210,6 +210,8 @@ marimo/_lsp/
 __marimo__/
 
 # Секретные данные (КРИТИЧНО!)
+**/.env
+backend/.env
 .env
 .env.local
 config.py
