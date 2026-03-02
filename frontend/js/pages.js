@@ -797,10 +797,10 @@ function showAddrForm(existing=null) {
     const a = existing||{};
     const s = showSheet(existing?'Изменить':'Новый адрес', `
         <div class="input-group"><label>Название</label><input class="input" id="af-title" placeholder="Дом, Работа..." value="${escapeHtml(a.title||'')}"></div>
-        <div class="input-group"><label>Город</label><input class="input" id="af-city" placeholder="Москва" value="${escapeHtml(a.city||'')}"></div>
+        <div class="input-group"><label>Город, населенный пункт</label><input class="input" id="af-city" placeholder="Москва" value="${escapeHtml(a.city||'')}"></div>
         <div class="input-group"><label>Улица</label><input class="input" id="af-street" placeholder="ул. Пушкина" value="${escapeHtml(a.street||'')}"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            <div class="input-group"><label>Дом, населенный пункт</label><input class="input" id="af-bld" placeholder="12А" value="${escapeHtml(a.building||'')}"></div>
+            <div class="input-group"><label>Дом</label><input class="input" id="af-bld" placeholder="12А" value="${escapeHtml(a.building||'')}"></div>
             <div class="input-group"><label>Квартира</label><input class="input" id="af-apt" placeholder="42" value="${escapeHtml(a.apartment||'')}"></div>
         </div>
         <div class="input-group"><label>Комментарий</label><input class="input" id="af-com" placeholder="Код домофона..." value="${escapeHtml(a.comment||'')}"></div>
