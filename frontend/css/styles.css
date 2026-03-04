@@ -1736,3 +1736,50 @@ input, select, textarea { font-family: inherit; font-size: 1rem; }
   background: var(--bg-secondary);
   margin: 4px 16px;
 }
+/* ── Кнопки переключения режима доставки ── */
+.ck-mode-btn {
+    transition: all 0.2s;
+    border: 2px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    font-weight: 500;
+}
+
+.ck-mode-btn.active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+}
+
+/* ── Поле ввода города ── */
+#ck-city-input {
+    padding: 12px 16px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 0.95rem;
+    background: var(--bg-secondary);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+#ck-city-input:focus {
+    border-color: var(--accent);
+}
+
+/* ── Подсказки городов ── */
+.city-option:hover,
+.city-option:active {
+    background: var(--bg-tertiary, rgba(0,0,0,0.05));
+}
+
+/* ── Выбранный ПВЗ ── */
+.pvz-option.selected {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb, 0,122,255), 0.08);
+}
+
+/* ── Блок информации о доставке ── */
+#ck-delivery-info .checkout-section {
+    margin: 8px 0;
+}

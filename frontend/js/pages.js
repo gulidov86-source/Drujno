@@ -432,82 +432,442 @@ export async function renderGroup(id) {
 // ============================================================
 
 export async function renderCheckout(groupId) {
-    setActiveNav(''); showBackButton(() => router.back());
-    trackEvent('checkout_start', { group_id: groupId });
+    setActiveNav(''); 
+    showBackButton(() => router.back());
     const app = document.getElementById('app');
-    app.innerHTML = '<div class="page-enter" style="padding-bottom:80px"><div class="topbar"><div class="topbar__title">Оформление</div></div><div style="padding:16px"><div class="skeleton" style="height:160px;border-radius:var(--radius-md)"></div></div></div>';
+    app.innerHTML = '<div class="page-enter" style="padding-bottom:80px"><div class="topbar"><div class="topbar__title">Оформление</div></div><div style="padding:16px"><div class="skeleton" style="height:300px;border-radius:var(--radius-md)"></div></div></div>';
 
     try {
+        // Загружаем данные сбора и адреса параллельно
         const [g, addrResult] = await Promise.all([
             api.groups.get(groupId),
-            api.users.addresses().catch(()=>({items:[]}))
+            api.users.addresses().catch(() => ({ items: [] }))
         ]);
         const addrs = addrResult.items || addrResult || [];
-        let selAddr = addrs.find(a=>a.is_default)?.id || addrs[0]?.id || null;
-        let delType = 'pickup';
 
+        // ── Состояние checkout ──
+        let state = {
+            deliveryMode: 'pvz',       // 'pvz' или 'courier'
+            selectedCity: null,         // {code, city, region}
+            selectedPvz: null,          // {code, name, address}
+            selectedAddr: addrs.find(a => a.is_default)?.id || addrs[0]?.id || null,
+            deliveryCost: 0,
+            deliveryDays: '',
+            productPrice: parseFloat(g.current_price) || 0,
+        };
+
+        // ── Рендер страницы ──
         app.innerHTML = `
         <div class="page-enter" style="padding-bottom:90px">
             <div class="topbar"><div class="topbar__title">Оформление заказа</div></div>
+
+            <!-- Товар -->
             <div class="checkout-section">
                 <div class="checkout-section__title">Товар</div>
                 <div class="order-card__product">
-                    <div class="order-card__img">${g.product_image?`<img src="${escapeHtml(g.product_image)}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-sm)">`:''}</div>
-                    <div class="order-card__info"><div class="order-card__name">${escapeHtml(g.product_name)}</div><div class="order-card__price">${formatPrice(g.current_price)}</div></div>
+                    <div class="order-card__img">${g.product_image ? `<img src="${escapeHtml(g.product_image)}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-sm)">` : '🧴'}</div>
+                    <div class="order-card__info">
+                        <div class="order-card__name">${escapeHtml(g.product_name)}</div>
+                        <div class="order-card__price">${formatPrice(g.current_price)}</div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Способ доставки -->
             <div class="checkout-section">
-                <div class="checkout-section__title">Адрес доставки</div>
-                <div id="ck-addrs">${addrs.length ? addrs.map(a=>`
-                    <div class="address-card ${a.id===selAddr?'selected':''}" data-addr="${a.id}" style="margin-bottom:8px">
-                        <div class="address-card__icon">📍</div>
-                        <div class="address-card__text"><div class="address-card__title">${escapeHtml(a.title)}</div><div class="address-card__detail">${escapeHtml(a.city)}, ${escapeHtml(a.street)}, д. ${escapeHtml(a.building)}${a.apartment?', кв. '+escapeHtml(a.apartment):''}</div></div>
-                    </div>`).join('') : '<div class="empty-state" style="padding:16px"><div class="empty-state__text">Добавьте адрес</div><button class="btn btn-secondary btn-sm" onclick="location.hash=\'addresses\'">Добавить</button></div>'}</div>
-            </div>
-            <div class="checkout-section">
-                <div class="checkout-section__title">Доставка</div>
-                <div id="ck-del">
-                    <div class="address-card selected" data-del="pickup" style="margin-bottom:8px;cursor:pointer"><div class="address-card__icon">📦</div><div class="address-card__text"><div class="address-card__title">Пункт выдачи</div><div class="address-card__detail">Бесплатно</div></div></div>
-                    <div class="address-card" data-del="courier" style="cursor:pointer"><div class="address-card__icon">🚚</div><div class="address-card__text"><div class="address-card__title">Курьером</div><div class="address-card__detail">от 300 ₽</div></div></div>
+                <div class="checkout-section__title">Способ доставки</div>
+                <div id="ck-mode" style="display:flex;gap:8px">
+                    <button class="btn btn-secondary btn-sm ck-mode-btn active" data-mode="pvz" style="flex:1">📦 Пункт выдачи</button>
+                    <button class="btn btn-secondary btn-sm ck-mode-btn" data-mode="courier" style="flex:1">🚚 Курьером</button>
                 </div>
             </div>
+
+            <!-- Блок ПВЗ (поиск города + выбор точки) -->
+            <div id="ck-pvz-block">
+                <div class="checkout-section">
+                    <div class="checkout-section__title">Город</div>
+                    <div style="position:relative">
+                        <input type="text" id="ck-city-input" class="input" placeholder="Начните вводить город..." autocomplete="off" style="width:100%">
+                        <div id="ck-city-list" style="position:absolute;top:100%;left:0;right:0;background:var(--bg-secondary);border-radius:0 0 var(--radius-md) var(--radius-md);box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:10;display:none;max-height:200px;overflow-y:auto"></div>
+                    </div>
+                    <div id="ck-city-selected" style="margin-top:8px;font-size:0.85rem;color:var(--text-hint)"></div>
+                </div>
+
+                <div class="checkout-section" id="ck-pvz-section" style="display:none">
+                    <div class="checkout-section__title">Пункт выдачи СДЭК</div>
+                    <div id="ck-pvz-loading" style="text-align:center;padding:16px;color:var(--text-hint)">Загрузка пунктов выдачи...</div>
+                    <div id="ck-pvz-list" style="max-height:300px;overflow-y:auto"></div>
+                </div>
+            </div>
+
+            <!-- Блок Курьер (выбор адреса) -->
+            <div id="ck-courier-block" style="display:none">
+                <div class="checkout-section">
+                    <div class="checkout-section__title">Адрес доставки</div>
+                    <div id="ck-addrs">${addrs.length ? addrs.map(a => `
+                        <div class="address-card ${a.id === state.selectedAddr ? 'selected' : ''}" data-addr="${a.id}" style="margin-bottom:8px;cursor:pointer">
+                            <div class="address-card__icon">📍</div>
+                            <div class="address-card__text">
+                                <div class="address-card__title">${escapeHtml(a.title)}</div>
+                                <div class="address-card__detail">${escapeHtml(a.city)}, ${escapeHtml(a.street)}, д. ${escapeHtml(a.building)}${a.apartment ? ', кв. ' + escapeHtml(a.apartment) : ''}</div>
+                            </div>
+                        </div>`).join('') : `
+                        <div class="empty-state" style="padding:16px">
+                            <div class="empty-state__text">Добавьте адрес для курьерской доставки</div>
+                            <button class="btn btn-secondary btn-sm" onclick="location.hash='addresses'">Добавить адрес</button>
+                        </div>`}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Расчёт доставки -->
+            <div id="ck-delivery-info" style="display:none">
+                <div class="checkout-section" style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:12px 16px;margin:0 16px">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span style="font-size:0.9rem">🚛 Доставка</span>
+                        <span id="ck-del-cost" style="font-weight:600"></span>
+                    </div>
+                    <div id="ck-del-days" style="font-size:0.8rem;color:var(--text-hint);margin-top:4px"></div>
+                </div>
+            </div>
+
+            <!-- Итого -->
             <div class="order-summary">
                 <div class="order-summary__row"><span>Товар</span><span>${formatPrice(g.current_price)}</span></div>
-                <div class="order-summary__row"><span>Доставка</span><span id="ck-dcost">Бесплатно</span></div>
-                <div class="order-summary__total"><span>Итого</span><span id="ck-total">${formatPrice(g.current_price)}</span></div>
+                <div class="order-summary__row"><span>Доставка</span><span id="ck-dcost-total">—</span></div>
+                <div class="order-summary__total"><span>Итого</span><span id="ck-total">—</span></div>
                 <div style="font-size:0.8rem;color:var(--text-hint);margin-top:4px">💡 Сумма будет заморожена до завершения сбора</div>
             </div>
-            <div class="sticky-action"><button class="btn btn-success btn-block btn-lg" id="pay-btn" ${!addrs.length?'disabled':''}>💳 Оплатить ${formatPrice(g.current_price)}</button></div>
+
+            <div class="sticky-action">
+                <button class="btn btn-success btn-block btn-lg" id="pay-btn" disabled>💳 Оплатить</button>
+            </div>
         </div>`;
 
-        document.getElementById('ck-addrs')?.addEventListener('click', e => {
-            const c = e.target.closest('[data-addr]'); if(!c) return; haptic('light');
-            document.querySelectorAll('#ck-addrs .address-card').forEach(c=>c.classList.remove('selected'));
-            c.classList.add('selected'); selAddr = parseInt(c.dataset.addr);
+        // ═══════════════════════════════════════════
+        // ОБРАБОТЧИКИ СОБЫТИЙ
+        // ═══════════════════════════════════════════
+
+        // ── Обновление итогов ──
+        function updateTotals() {
+            const delCostEl = document.getElementById('ck-dcost-total');
+            const totalEl = document.getElementById('ck-total');
+            const payBtn = document.getElementById('pay-btn');
+            
+            if (state.deliveryCost > 0) {
+                delCostEl.textContent = formatPrice(state.deliveryCost);
+            } else if (state.selectedCity || state.selectedAddr) {
+                delCostEl.textContent = 'Бесплатно';
+            } else {
+                delCostEl.textContent = '—';
+            }
+            
+            const total = state.productPrice + state.deliveryCost;
+            totalEl.textContent = formatPrice(total);
+            
+            // Кнопка активна когда выбрана точка доставки
+            const canPay = state.deliveryMode === 'pvz' 
+                ? !!state.selectedPvz 
+                : !!state.selectedAddr;
+            
+            payBtn.disabled = !canPay;
+            if (canPay) {
+                payBtn.textContent = `💳 Оплатить ${formatPrice(total)}`;
+            } else {
+                payBtn.textContent = '💳 Выберите пункт доставки';
+            }
+        }
+
+        // ── Переключение ПВЗ / Курьер ──
+        document.getElementById('ck-mode')?.addEventListener('click', e => {
+            const btn = e.target.closest('.ck-mode-btn');
+            if (!btn) return;
+            haptic('light');
+            
+            document.querySelectorAll('.ck-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            state.deliveryMode = btn.dataset.mode;
+            state.deliveryCost = 0;
+            state.selectedPvz = null;
+            
+            document.getElementById('ck-pvz-block').style.display = state.deliveryMode === 'pvz' ? 'block' : 'none';
+            document.getElementById('ck-courier-block').style.display = state.deliveryMode === 'courier' ? 'block' : 'none';
+            document.getElementById('ck-delivery-info').style.display = 'none';
+            
+            // Для курьера — пробуем рассчитать по городу из адреса
+            if (state.deliveryMode === 'courier' && state.selectedAddr) {
+                const addr = addrs.find(a => a.id === state.selectedAddr);
+                if (addr?.city) calculateDelivery(addr.city);
+            }
+            
+            updateTotals();
         });
 
-        document.getElementById('ck-del')?.addEventListener('click', e => {
-            const c = e.target.closest('[data-del]'); if(!c) return; haptic('light');
-            document.querySelectorAll('#ck-del .address-card').forEach(c=>c.classList.remove('selected'));
-            c.classList.add('selected'); delType = c.dataset.del;
-            const cost = delType==='courier'?300:0;
-            document.getElementById('ck-dcost').textContent = cost?formatPrice(cost):'Бесплатно';
-            document.getElementById('ck-total').textContent = formatPrice(parseFloat(g.current_price)+cost);
+        // ── Поиск города (автокомплит) ──
+        const cityInput = document.getElementById('ck-city-input');
+        const cityList = document.getElementById('ck-city-list');
+        
+        let searchTimeout = null;
+        cityInput?.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            const q = cityInput.value.trim();
+            
+            if (q.length < 2) {
+                cityList.style.display = 'none';
+                return;
+            }
+            
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const result = await api.delivery.cities(q);
+                    const cities = result.cities || result || [];
+                    
+                    if (cities.length === 0) {
+                        cityList.innerHTML = '<div style="padding:12px;color:var(--text-hint);font-size:0.85rem">Город не найден</div>';
+                    } else {
+                        cityList.innerHTML = cities.map(c => `
+                            <div class="city-option" data-code="${c.code}" data-city="${escapeHtml(c.city)}" data-region="${escapeHtml(c.region || '')}" 
+                                 style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)">
+                                <div style="font-size:0.9rem">${escapeHtml(c.city)}</div>
+                                ${c.region ? `<div style="font-size:0.75rem;color:var(--text-hint)">${escapeHtml(c.region)}</div>` : ''}
+                            </div>
+                        `).join('');
+                    }
+                    cityList.style.display = 'block';
+                } catch (e) {
+                    console.error('Ошибка поиска городов:', e);
+                    cityList.innerHTML = '<div style="padding:12px;color:var(--text-hint)">Ошибка загрузки</div>';
+                    cityList.style.display = 'block';
+                }
+            }, 400);  // Debounce 400ms
         });
 
-        document.getElementById('pay-btn')?.addEventListener('click', async () => {
-            if(!selAddr){showToast('Выберите адрес','error');return;}
-            haptic('medium');
-            const btn = document.getElementById('pay-btn'); btn.disabled=true; btn.textContent='Обработка...';
+        // ── Выбор города из списка ──
+        cityList?.addEventListener('click', async (e) => {
+            const option = e.target.closest('.city-option');
+            if (!option) return;
+            haptic('light');
+            
+            const cityName = option.dataset.city;
+            const cityCode = parseInt(option.dataset.code);
+            const region = option.dataset.region;
+            
+            state.selectedCity = { code: cityCode, city: cityName, region };
+            state.selectedPvz = null;
+            
+            cityInput.value = cityName;
+            cityList.style.display = 'none';
+            document.getElementById('ck-city-selected').textContent = 
+                region ? `${cityName}, ${region}` : cityName;
+            
+            // Загружаем ПВЗ и рассчитываем доставку
+            await loadPickupPoints(cityName);
+            await calculateDelivery(cityName);
+        });
+
+        // Скрываем список при клике вне
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#ck-city-input') && !e.target.closest('#ck-city-list')) {
+                cityList.style.display = 'none';
+            }
+        });
+
+        // ── Загрузка пунктов выдачи ──
+        async function loadPickupPoints(cityName) {
+            const section = document.getElementById('ck-pvz-section');
+            const loading = document.getElementById('ck-pvz-loading');
+            const list = document.getElementById('ck-pvz-list');
+            
+            section.style.display = 'block';
+            loading.style.display = 'block';
+            list.innerHTML = '';
+            
             try {
-                const order = await api.orders.create({group_id:parseInt(groupId), address_id:selAddr, delivery_type:delType});
-                showToast('Заказ оформлен!','success'); haptic('success');
-                if(order.payment_url) window.open(order.payment_url,'_blank');
-                router.navigate(`order/${order.order_id || order.id}`);
-            } catch(e) { btn.disabled=false; btn.textContent='💳 Оплатить'; showToast(e.message||'Ошибка','error'); haptic('error'); }
+                const result = await api.delivery.points(cityName);
+                const points = result.points || result || [];
+                loading.style.display = 'none';
+                
+                if (points.length === 0) {
+                    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-hint)">Нет доступных ПВЗ в этом городе</div>';
+                    return;
+                }
+                
+                list.innerHTML = points.slice(0, 30).map(p => `
+                    <div class="address-card pvz-option" data-pvz='${JSON.stringify({code: p.code, name: p.name, address: p.address}).replace(/'/g, "&#39;")}' 
+                         style="margin-bottom:8px;cursor:pointer">
+                        <div class="address-card__icon">📦</div>
+                        <div class="address-card__text">
+                            <div class="address-card__title">${escapeHtml(p.name)}</div>
+                            <div class="address-card__detail">${escapeHtml(p.address)}</div>
+                            <div style="font-size:0.75rem;color:var(--text-hint);margin-top:2px">🕐 ${escapeHtml(p.work_time || 'Уточняйте')}</div>
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch (e) {
+                console.error('Ошибка загрузки ПВЗ:', e);
+                loading.style.display = 'none';
+                list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-hint)">Ошибка загрузки ПВЗ</div>';
+            }
+        }
+
+        // ── Выбор ПВЗ ──
+        document.getElementById('ck-pvz-list')?.addEventListener('click', (e) => {
+            const option = e.target.closest('.pvz-option');
+            if (!option) return;
+            haptic('light');
+            
+            document.querySelectorAll('.pvz-option').forEach(o => o.classList.remove('selected'));
+            option.classList.add('selected');
+            
+            try {
+                state.selectedPvz = JSON.parse(option.dataset.pvz);
+            } catch { 
+                state.selectedPvz = { code: 'unknown', name: 'ПВЗ', address: '' };
+            }
+            
+            updateTotals();
         });
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+
+        // ── Выбор адреса (курьер) ──
+        document.getElementById('ck-addrs')?.addEventListener('click', async (e) => {
+            const card = e.target.closest('[data-addr]');
+            if (!card) return;
+            haptic('light');
+            
+            document.querySelectorAll('#ck-addrs .address-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            state.selectedAddr = parseInt(card.dataset.addr);
+            
+            // Рассчитываем доставку по городу адреса
+            const addr = addrs.find(a => a.id === state.selectedAddr);
+            if (addr?.city) await calculateDelivery(addr.city);
+            
+            updateTotals();
+        });
+
+        // ── Расчёт стоимости доставки ──
+        async function calculateDelivery(cityName) {
+            const infoBlock = document.getElementById('ck-delivery-info');
+            
+            try {
+                const result = await api.delivery.calculate(cityName, 500);
+                
+                if (result.success && result.delivery_sum) {
+                    state.deliveryCost = parseFloat(result.delivery_sum);
+                    
+                    infoBlock.style.display = 'block';
+                    document.getElementById('ck-del-cost').textContent = formatPrice(state.deliveryCost);
+                    document.getElementById('ck-del-days').textContent = 
+                        result.period_text ? `Срок: ${result.period_text}` : '';
+                } else {
+                    // СДЭК не смог рассчитать — фиксированная цена
+                    state.deliveryCost = 350;
+                    infoBlock.style.display = 'block';
+                    document.getElementById('ck-del-cost').textContent = formatPrice(350);
+                    document.getElementById('ck-del-days').textContent = 'Срок: 3-7 дней';
+                }
+                
+                updateTotals();
+            } catch (e) {
+                console.error('Ошибка расчёта доставки:', e);
+                state.deliveryCost = 350;
+                infoBlock.style.display = 'block';
+                document.getElementById('ck-del-cost').textContent = formatPrice(350);
+                document.getElementById('ck-del-days').textContent = 'Срок: 3-7 дней';
+                updateTotals();
+            }
+        }
+
+        // ── Кнопка оплаты ──
+        document.getElementById('pay-btn')?.addEventListener('click', async () => {
+            const canPay = state.deliveryMode === 'pvz' 
+                ? !!state.selectedPvz 
+                : !!state.selectedAddr;
+            
+            if (!canPay) {
+                showToast('Выберите пункт доставки', 'error');
+                return;
+            }
+            
+            haptic('medium');
+            const btn = document.getElementById('pay-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Обработка...';
+            
+            try {
+                // Для ПВЗ — нам нужен адрес в БД
+                // Если выбран ПВЗ, используем первый адрес или создаём временный
+                let addressId = state.selectedAddr;
+                
+                if (state.deliveryMode === 'pvz' && state.selectedPvz) {
+                    // Если нет адреса — создаём из данных ПВЗ
+                    if (!addressId) {
+                        try {
+                            const newAddr = await api.users.addAddress({
+                                title: 'ПВЗ СДЭК',
+                                city: state.selectedCity?.city || 'Москва',
+                                street: state.selectedPvz.address || 'ПВЗ',
+                                building: state.selectedPvz.code || '-',
+                                postal_code: '000000',
+                                is_default: true
+                            });
+                            addressId = newAddr.id;
+                        } catch (e) {
+                            console.error('Ошибка создания адреса:', e);
+                            showToast('Ошибка создания адреса', 'error');
+                            btn.disabled = false;
+                            btn.textContent = '💳 Оплатить';
+                            return;
+                        }
+                    }
+                }
+                
+                if (!addressId) {
+                    showToast('Добавьте адрес доставки', 'error');
+                    btn.disabled = false;
+                    btn.textContent = '💳 Оплатить';
+                    return;
+                }
+                
+                const order = await api.orders.create({
+                    group_id: parseInt(groupId),
+                    address_id: addressId,
+                    delivery_type: state.deliveryMode === 'pvz' ? 'pickup' : 'courier',
+                    comment: state.selectedPvz 
+                        ? `ПВЗ СДЭК: ${state.selectedPvz.name}, ${state.selectedPvz.address} (код: ${state.selectedPvz.code})`
+                        : null
+                });
+                
+                showToast('Заказ оформлен!', 'success');
+                haptic('success');
+                
+                // Открываем страницу оплаты ЮKassa
+                if (order.payment_url) {
+                    window.open(order.payment_url, '_blank');
+                }
+                
+                router.navigate(`order/${order.order_id || order.id}`);
+                
+            } catch (e) {
+                console.error('Ошибка оплаты:', e);
+                btn.disabled = false;
+                btn.textContent = '💳 Оплатить';
+                showToast(e.message || 'Ошибка оформления', 'error');
+                haptic('error');
+            }
+        });
+
+        // Начальное обновление
+        updateTotals();
+
+    } catch (e) {
+        console.error('Ошибка checkout:', e);
+        app.innerHTML = `<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div><div class="empty-state__text">${escapeHtml(e.message || '')}</div></div>`;
+    }
 }
+
 
 
 // ============================================================

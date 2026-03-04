@@ -165,8 +165,9 @@ const api = {
     // ─── Доставка (СДЭК) ───
     delivery: {
         cities: (q) => request('GET', `/api/delivery/cities?query=${encodeURIComponent(q)}`),
-        points: (cityCode) => request('GET', `/api/delivery/points?city_code=${cityCode}`),
-        calculate: (d) => request('POST', '/api/delivery/calculate', d),
+        points: (city, type) => request('GET', `/api/delivery/pickup-points?city=${encodeURIComponent(city)}${type ? '&type='+type : ''}`),
+        calculate: (toCity, weight) => request('GET', `/api/delivery/calculate?to_city=${encodeURIComponent(toCity)}&weight=${weight || 500}`),
+        tariffs: (toCity, weight) => request('GET', `/api/delivery/tariffs?to_city=${encodeURIComponent(toCity)}&weight=${weight || 500}`),
     },
 
     // ─── Возвраты ───

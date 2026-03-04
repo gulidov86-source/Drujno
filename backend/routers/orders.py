@@ -606,18 +606,41 @@ async def create_order(
     
     order_id = order_result.data[0]["id"]
     
-    # 6. Создаём платёж
+    # 6. Создаём платёж с данными для чека (54-ФЗ)
     product_name = product_data.get("name", "Товар")
     description = f"Групповая покупка: {product_name}"
     
     # URL возврата после оплаты
     return_url = f"{settings.TELEGRAM_WEBAPP_URL}?order={order_id}"
     
+    # Получаем телефон пользователя (если есть)
+    user_data = db.table("users").select("phone").eq("id", user_id).limit(1).execute()
+    user_phone = user_data.data[0].get("phone") if user_data.data else None
+    
+    # Формируем позиции чека (товар + доставка отдельно)
+    receipt_items = [
+        {
+            "name": product_name[:128],
+            "quantity": 1,
+            "price": str(final_price)
+        }
+    ]
+    
+    # Доставка — отдельная позиция в чеке (если платная)
+    if delivery_cost > 0:
+        receipt_items.append({
+            "name": "Доставка СДЭК",
+            "quantity": 1,
+            "price": str(delivery_cost)
+        })
+    
     payment_result = await payment_service.create_payment(
         amount=total_amount,
         order_id=order_id,
         description=description,
-        return_url=return_url
+        return_url=return_url,
+        user_phone=user_phone,
+        items=receipt_items
     )
     
     if not payment_result.success:

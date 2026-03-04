@@ -198,38 +198,21 @@ class PaymentService:
         return_url: str = None,
         user_email: str = None,
         user_phone: str = None,
-        save_payment_method: bool = False
+        save_payment_method: bool = False,
+        # ── НОВЫЕ ПАРАМЕТРЫ ДЛЯ ЧЕКА ──
+        items: list = None  # [{name, quantity, price}]
     ) -> PaymentCreateResult:
         """
-        Создать платёж в ЮKassa.
-        
-        Используем capture=False для двухэтапной оплаты:
-        1. Деньги замораживаются на карте
-        2. Потом списываем через capture_payment()
+        Создать платёж в ЮKassa с обязательным чеком (54-ФЗ).
         
         Параметры:
             amount: Сумма платежа
-            order_id: ID заказа в нашей системе
-            description: Описание (покажется пользователю)
-            return_url: Куда вернуть после оплаты
-            user_email: Email для чека (опционально)
-            user_phone: Телефон для чека (опционально)
-            save_payment_method: Сохранить способ оплаты
-        
-        Возвращает:
-            PaymentCreateResult: Результат с URL для оплаты
-        
-        Пример:
-            result = await service.create_payment(
-                amount=Decimal("19000"),
-                order_id=42,
-                description="Групповая покупка: AirPods Pro",
-                return_url="https://t.me/MyBot/app?order=42"
-            )
-            
-            if result.success:
-                # Редирект пользователя
-                print(f"Оплата: {result.confirmation_url}")
+            order_id: ID заказа
+            description: Описание
+            return_url: URL возврата после оплаты
+            user_email: Email покупателя (для чека)
+            user_phone: Телефон покупателя (для чека)
+            items: Позиции чека [{name, quantity, price}]
         """
         if not self.shop_id or not self.secret_key:
             return PaymentCreateResult(
@@ -237,14 +220,14 @@ class PaymentService:
                 error="Платёжная система не настроена"
             )
         
-        # Формируем запрос
+        # ── Формируем запрос ──
         payment_data = {
             "amount": {
                 "value": str(amount),
                 "currency": "RUB"
             },
-            "capture": False,  # Двухэтапная оплата!
-            "description": description,
+            "capture": False,  # Двухэтапная оплата (холд)
+            "description": description[:128],
             "metadata": {
                 "order_id": str(order_id)
             },
@@ -254,33 +237,63 @@ class PaymentService:
             }
         }
         
-        # Данные для чека (54-ФЗ)
-        if user_email or user_phone:
-            payment_data["receipt"] = {
-                "customer": {}
-            }
-            if user_email:
-                payment_data["receipt"]["customer"]["email"] = user_email
-            if user_phone:
-                payment_data["receipt"]["customer"]["phone"] = user_phone
-            
-            # Позиции чека
-            payment_data["receipt"]["items"] = [{
-                "description": description[:128],  # Макс 128 символов
+        # ── ЧЕКИ (54-ФЗ) — ВСЕГДА включаем ──
+        # 
+        # ЮKassa требует receipt для всех платежей.
+        # В receipt обязательно:
+        #   1. customer — кому чек (email ИЛИ phone)
+        #   2. items — что продаём (название, цена, количество, НДС)
+        #
+        receipt_customer = {}
+        if user_email:
+            receipt_customer["email"] = user_email
+        if user_phone:
+            receipt_customer["phone"] = user_phone
+        
+        # Если нет ни email, ни phone — используем email магазина
+        # (ЮKassa требует хотя бы один контакт)
+        if not receipt_customer:
+            receipt_customer["email"] = "u.r.all@yandex.ru"
+        
+        # Формируем позиции чека
+        if items and len(items) > 0:
+            # Если переданы конкретные позиции (товар + доставка)
+            receipt_items = []
+            for item in items:
+                receipt_items.append({
+                    "description": str(item.get("name", "Товар"))[:128],
+                    "quantity": str(item.get("quantity", 1)) + ".00",
+                    "amount": {
+                        "value": str(item.get("price", amount)),
+                        "currency": "RUB"
+                    },
+                    "vat_code": 1,  # Без НДС (для ИП на УСН)
+                    "payment_mode": "full_payment",
+                    "payment_subject": "commodity"
+                })
+        else:
+            # Одна позиция = вся сумма
+            receipt_items = [{
+                "description": description[:128],
                 "quantity": "1.00",
                 "amount": {
                     "value": str(amount),
                     "currency": "RUB"
                 },
-                "vat_code": 1,  # НДС не облагается
+                "vat_code": 1,
                 "payment_mode": "full_payment",
                 "payment_subject": "commodity"
             }]
         
+        payment_data["receipt"] = {
+            "customer": receipt_customer,
+            "items": receipt_items
+        }
+        
         if save_payment_method:
             payment_data["save_payment_method"] = True
         
-        # Отправляем запрос
+        # ── Отправляем запрос ──
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -311,16 +324,17 @@ class PaymentService:
                 else:
                     error_data = response.json()
                     error_msg = error_data.get("description", "Ошибка создания платежа")
-                    
+                    print(f"❌ ЮKassa ошибка: {error_data}")
                     return PaymentCreateResult(
                         success=False,
                         error=error_msg
                     )
                     
         except Exception as e:
+            print(f"❌ ЮKassa exception: {e}")
             return PaymentCreateResult(
                 success=False,
-                error=f"Ошибка соединения: {str(e)}"
+                error=str(e)
             )
     
     # ============================================================
