@@ -9,6 +9,8 @@
 - При присоединении к сбору организатор получает push в Telegram
 - Уведомления отправляются в фоновом режиме (BackgroundTasks)
 
+ОБНОВЛЕНО: Добавлен Rate Limiting на создание сборов (Спринт 1).
+
 Эндпоинты:
     GET  /api/groups              — Список активных сборов
     GET  /api/groups/{id}         — Детали сбора
@@ -28,7 +30,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request, status
 from pydantic import BaseModel, Field
 
 import sys
@@ -48,6 +50,7 @@ from services.price_calculator import (
 )
 from utils.auth import get_current_user, get_current_user_optional
 from utils.telegram import parse_start_param
+from rate_limiter import limiter, create_limit
 
 
 # ============================================================
@@ -603,8 +606,10 @@ async def get_group_detail(
     - На товар не должно быть активного сбора
     """
 )
+@limiter.limit(create_limit)  # 3 запроса/минуту — антиспам
 async def create_group(
-    request: CreateGroupRequest,
+    request: Request,
+    body: CreateGroupRequest,
     user_id: int = Depends(get_current_user)
 ):
     """
@@ -613,11 +618,11 @@ async def create_group(
     manager = get_group_manager()
     
     result = await manager.create_group(
-        product_id=request.product_id,
+        product_id=body.product_id,
         creator_id=user_id,
-        min_participants=request.min_participants,
-        max_participants=request.max_participants,
-        deadline_days=request.deadline_days
+        min_participants=body.min_participants,
+        max_participants=body.max_participants,
+        deadline_days=body.deadline_days
     )
     
     if not result.success:
@@ -652,7 +657,7 @@ async def create_group(
 async def join_group(
     group_id: int,
     background_tasks: BackgroundTasks,
-    request: JoinGroupRequest = JoinGroupRequest(),
+    join_request: JoinGroupRequest = JoinGroupRequest(),
     user_id: int = Depends(get_current_user)
 ):
     """
@@ -662,10 +667,10 @@ async def join_group(
     Уведомление отправляется в фоне (background_tasks), чтобы не замедлять ответ.
     """
     # Парсим start_param если есть
-    invited_by = request.invited_by_user_id
+    invited_by = join_request.invited_by_user_id
     
-    if request.start_param and not invited_by:
-        parsed = parse_start_param(request.start_param)
+    if join_request.start_param and not invited_by:
+        parsed = parse_start_param(join_request.start_param)
         invited_by = parsed.get("referrer_id")
     
     # Нельзя пригласить самого себя

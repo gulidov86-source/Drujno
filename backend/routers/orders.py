@@ -10,6 +10,8 @@
                  ↓
              REFUNDED (если сбор не состоялся)
 
+ОБНОВЛЕНО: Добавлен Rate Limiting на создание заказов (Спринт 1).
+
 Эндпоинты:
     GET  /api/orders           — Мои заказы
     GET  /api/orders/{id}      — Детали заказа
@@ -25,7 +27,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 import sys
@@ -40,6 +42,7 @@ from services.price_calculator import calculate_current_price
 from services.payment_service import get_payment_service
 from services.group_manager import get_group_manager
 from utils.auth import get_current_user
+from rate_limiter import limiter, create_limit
 
 
 # ============================================================
@@ -455,8 +458,10 @@ async def get_order_detail(
     После оплаты пользователь автоматически присоединяется к сбору.
     """
 )
+@limiter.limit(create_limit)  # 3 запроса/минуту — антиспам
 async def create_order(
-    request: CreateOrderRequest,
+    request: Request,
+    body: CreateOrderRequest,
     user_id: int = Depends(get_current_user)
 ):
     """
@@ -470,7 +475,7 @@ async def create_order(
     group = (
         db.table("groups")
         .select("*, products(id, name, base_price, price_tiers)")
-        .eq("id", request.group_id)
+        .eq("id", body.group_id)
         .limit(1)
         .execute()
     )
@@ -504,7 +509,7 @@ async def create_order(
     existing_order = (
         db.table("orders")
         .select("id, status")
-        .eq("group_id", request.group_id)
+        .eq("group_id", body.group_id)
         .eq("user_id", user_id)
         .neq("status", "cancelled")
         .limit(1)
@@ -522,7 +527,7 @@ async def create_order(
     address = (
         db.table("addresses")
         .select("*")
-        .eq("id", request.address_id)
+        .eq("id", body.address_id)
         .eq("user_id", user_id)
         .limit(1)
         .execute()
@@ -553,7 +558,7 @@ async def create_order(
     is_already_member = (
         db.table("group_members")
         .select("id")
-        .eq("group_id", request.group_id)
+        .eq("group_id", body.group_id)
         .eq("user_id", user_id)
         .limit(1)
         .execute()
@@ -566,29 +571,29 @@ async def create_order(
         # Не участник — добавляем в сбор + цена с учётом нового участника
         final_price = calculate_current_price(price_tiers, current_count + 1, base_price)
         db.table("group_members").insert({
-            "group_id": request.group_id,
+            "group_id": body.group_id,
             "user_id": user_id,
             "joined_at": datetime.now(timezone.utc).isoformat()
         }).execute()
         # Обновляем счётчик
         db.table("groups").update({
             "current_count": current_count + 1
-        }).eq("id", request.group_id).execute()
+        }).eq("id", body.group_id).execute()
     
-    delivery_cost = calculate_delivery_cost(request.delivery_type, address_data.get("city"))
+    delivery_cost = calculate_delivery_cost(body.delivery_type, address_data.get("city"))
     total_amount = final_price + delivery_cost
     
     # 5. Создаём заказ
     order_data = {
         "user_id": user_id,
-        "group_id": request.group_id,
-        "address_id": request.address_id,
+        "group_id": body.group_id,
+        "address_id": body.address_id,
         "final_price": float(final_price),
         "delivery_cost": float(delivery_cost),
         "total_amount": float(total_amount),
         "status": "pending",
-        "delivery_type": request.delivery_type.value,
-        "comment": request.comment,
+        "delivery_type": body.delivery_type.value,
+        "comment": body.comment,
         "status_history": [{
             "status": "pending",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -653,9 +658,9 @@ async def create_order(
         )
     
     # 7. Сохраняем invited_by для будущего присоединения
-    if request.invited_by_user_id:
+    if body.invited_by_user_id:
         db.table("orders").update({
-            "comment": f"{request.comment or ''}\n[ref:{request.invited_by_user_id}]".strip()
+            "comment": f"{body.comment or ''}\n[ref:{body.invited_by_user_id}]".strip()
         }).eq("id", order_id).execute()
     
     return CreateOrderResponse(

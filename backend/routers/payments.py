@@ -33,6 +33,9 @@ from database.models import PaymentStatus, PaymentMethod
 from services.payment_service import get_payment_service
 from services.group_manager import get_group_manager
 from utils.auth import get_current_user
+from logger import get_logger
+
+logger = get_logger("payments")
 
 
 # ============================================================
@@ -179,14 +182,29 @@ async def handle_webhook(
     # Получаем тело запроса
     body = await request.body()
     
-    # Проверяем подпись (если настроен секрет)
-    if webhook_signature:
+    webhook_secret = settings.YOOKASSA_WEBHOOK_SECRET if hasattr(settings, 'YOOKASSA_WEBHOOK_SECRET') else ""
+    
+    if webhook_secret:
+        # Секрет настроен → ОБЯЗАТЕЛЬНО проверяем подпись
+        if not webhook_signature:
+            # Нет подписи в запросе → отклоняем
+            print("[Webhook] ❌ Отклонён: нет подписи (Webhook-Signature header)")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing webhook signature"
+            )
+        
         is_valid = payment_service.verify_webhook_signature(body, webhook_signature)
         if not is_valid:
+            print("[Webhook] ❌ Отклонён: невалидная подпись")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature"
             )
+        print("[Webhook] ✅ Подпись проверена")
+    else:
+        # Секрет НЕ настроен → предупреждаем (для dev-режима)
+        print("[Webhook] ⚠️ YOOKASSA_WEBHOOK_SECRET не задан! Подпись не проверяется!")
     
     # Парсим JSON
     try:
@@ -210,7 +228,7 @@ async def handle_webhook(
     payment_id = payment_data.get("id")
     order_id = payment_data.get("metadata", {}).get("order_id")
     
-    print(f"[Webhook] {event_type}: payment={payment_id}, order={order_id}")
+    logger.info("Webhook получен", event_type=event_type, payment_id=payment_id, order_id=order_id)
     
     if event_type == "payment.waiting_for_capture":
         # Деньги заморожены — присоединяем к сбору

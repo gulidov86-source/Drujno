@@ -22,7 +22,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
 from pydantic import BaseModel
 
 import sys
@@ -46,6 +46,7 @@ from utils.auth import (
     get_current_user_optional,
     TokenResponse
 )
+from rate_limiter import limiter, auth_limit
 
 
 # ============================================================
@@ -195,7 +196,8 @@ def get_next_level_requirements(level: str) -> Optional[dict]:
     ```
     """
 )
-async def auth_telegram(request: AuthRequest):
+@limiter.limit(auth_limit)
+async def auth_telegram(request: Request, body: AuthRequest):
     """
     Авторизация через Telegram.
     
@@ -206,7 +208,7 @@ async def auth_telegram(request: AuthRequest):
     4. Находим или создаём пользователя в БД
     5. Генерируем JWT токен
     """
-    init_data = request.init_data
+    init_data = body.init_data
     
     # 1. Проверяем подпись
     if not validate_telegram_init_data(init_data):

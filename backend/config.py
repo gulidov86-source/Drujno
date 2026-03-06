@@ -27,7 +27,12 @@ class Settings(BaseSettings):
     Пример:
         settings = Settings()
         token = settings.TELEGRAM_BOT_TOKEN
+
     """
+    
+    # Telegram ID администраторов (через запятую)
+    # Пример: "123456789,987654321"
+    ADMIN_TELEGRAM_IDS: str = ""
     
     # ==================== TELEGRAM ====================
     # Токен бота, полученный от @BotFather
@@ -233,6 +238,18 @@ def validate_config() -> dict:
     
     if settings.APP_ENV == "production" and settings.DEBUG:
         warnings.append("DEBUG=True в production — рекомендуется отключить")
+        
+     # ===== НОВЫЕ ПРОВЕРКИ ДЛЯ PRODUCTION =====
+    if settings.APP_ENV == "production":
+        if settings.DEBUG:
+            warnings.append("⚠️ DEBUG=True в production! Установи DEBUG=False")
+        
+        if not settings.YOOKASSA_WEBHOOK_SECRET:
+            warnings.append("🚨 YOOKASSA_WEBHOOK_SECRET не задан! Webhook'и не защищены!")
+        
+        admin_ids = settings.ADMIN_TELEGRAM_IDS if hasattr(settings, 'ADMIN_TELEGRAM_IDS') else ""
+        if not admin_ids:
+            warnings.append("🚨 ADMIN_TELEGRAM_IDS пуст! Админ-бот заблокирован для всех!")
     
     return {
         "valid": len(missing) == 0,

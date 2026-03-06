@@ -630,8 +630,9 @@ class PaymentService:
             bool: True если подпись верна
         """
         if not settings.YOOKASSA_WEBHOOK_SECRET:
-            # Без секрета не можем проверить
-            return True  # Для разработки
+            # Без секрета не можем проверить — ОТКЛОНЯЕМ
+            # Раньше тут было return True — это дыра!
+            return False
         
         expected = hmac.new(
             settings.YOOKASSA_WEBHOOK_SECRET.encode(),

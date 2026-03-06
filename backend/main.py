@@ -17,6 +17,7 @@
 """
 
 
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,10 +25,16 @@ from fastapi.responses import JSONResponse
 import time
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.gzip import GZipMiddleware
 
 # Импортируем наши модули
 from config import settings, validate_config, is_development
 from database.connection import check_connection
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from rate_limiter import limiter, rate_limit_exceeded_handler
+
 
 
 # ============================================================
@@ -48,8 +55,11 @@ async def lifespan(app: FastAPI):
     - Проверки подключения к БД
     - Освобождения ресурсов при остановке
     """
+    from logger import get_logger
+
+    logger = get_logger("main")
     # ===== STARTUP =====
-    print("🚀 Запуск GroupBuy Mini App...")
+    logger.info("Запуск GroupBuy Mini App")
     
     # Проверяем конфигурацию
     config_check = validate_config()
@@ -68,15 +78,20 @@ async def lifespan(app: FastAPI):
         print("✅ База данных OK")
     else:
         print(f"⚠️  База данных: {db_check['error']}")
+
     
     # Выводим информацию о режиме
     print(f"📍 Режим: {settings.APP_ENV}")
     print(f"🌐 URL: http://{settings.HOST}:{settings.PORT}")
     print(f"📚 Документация: http://{settings.HOST}:{settings.PORT}/docs")
+
+    from scheduler import start_scheduler, stop_scheduler
+    start_scheduler()
     print("─" * 50)
     
     yield  # Приложение работает
-    
+
+    stop_scheduler()
     # ===== SHUTDOWN =====
     print("👋 Остановка приложения...")
     # Здесь можно закрыть соединения, сохранить состояние и т.д.
@@ -113,6 +128,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Rate Limiting — защита от перегрузки
+# Аналогия: турникет в метро — пропускает 60 человек/минуту
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
+# GZip — сжимаем ответы для ускорения загрузки
+# minimum_size=1000 — не сжимаем мелкие ответы (нет смысла)
+# Аналогия: упаковщик, который сжимает посылки перед отправкой
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ============================================================
 # MIDDLEWARE

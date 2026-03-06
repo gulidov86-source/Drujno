@@ -39,7 +39,8 @@ from config import settings
 from database.connection import get_supabase_client
 
 ADMIN_BOT_TOKEN = getattr(settings, 'ADMIN_BOT_TOKEN', '')
-ADMIN_IDS = []  # Вставь свой Telegram ID
+_raw_ids = getattr(settings, 'ADMIN_TELEGRAM_IDS', '')
+ADMIN_IDS = [int(x.strip()) for x in _raw_ids.split(',') if x.strip().isdigit()]
 
 bot = Bot(token=ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -48,11 +49,11 @@ SE = {"pending":"⏳","frozen":"🧊","paid":"💳","processing":"⚙️","shipp
 LE = {"newcomer":"🌱","buyer":"🛒","activist":"⭐","expert":"🔥","ambassador":"👑"}
 RD = {"wrong_size":"Не подошёл размер","defect":"Брак","not_as_described":"Не соответствует описанию","changed_mind":"Передумал"}
 
-def is_admin(uid): return not ADMIN_IDS or uid in ADMIN_IDS
-async def chk(msg):
-    if not is_admin(msg.from_user.id):
-        await msg.answer("⛔ Доступ запрещён."); return False
-    return True
+def is_admin(uid):
+    """Проверка прав администратора. Если список пуст — НЕ пускаем никого."""
+    if not ADMIN_IDS:
+        return False  # Было: not ADMIN_IDS → True (пускал всех!)
+    return uid in ADMIN_IDS
 
 @dp.message(CommandStart())
 async def cmd_start(msg: types.Message):
