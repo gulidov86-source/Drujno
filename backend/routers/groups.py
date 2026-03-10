@@ -6,10 +6,8 @@
 Это ядро API — работа с групповыми закупками.
 
 ОБНОВЛЕНО: Добавлена интеграция с системой уведомлений (Фаза 8).
-- При присоединении к сбору организатор получает push в Telegram
-- Уведомления отправляются в фоновом режиме (BackgroundTasks)
-
 ОБНОВЛЕНО: Добавлен Rate Limiting на создание сборов (Спринт 1).
+ОБНОВЛЕНО: Пересчёт цены при выходе участника (Спринт 2).
 
 Эндпоинты:
     GET  /api/groups              — Список активных сборов
@@ -56,8 +54,6 @@ from rate_limiter import limiter, create_limit
 # ============================================================
 # ИМПОРТ УВЕДОМЛЕНИЙ
 # ============================================================
-# Используем try/except чтобы приложение работало даже если
-# модуль уведомлений недоступен (graceful degradation)
 
 try:
     from services.notification_integration import notify_on_join
@@ -83,9 +79,6 @@ router = APIRouter(
 # ============================================================
 
 class GroupListItem(BaseModel):
-    """
-    Сбор в списке (лента).
-    """
     id: int
     status: GroupStatus
     current_count: int
@@ -94,25 +87,18 @@ class GroupListItem(BaseModel):
     progress_percent: float
     deadline: datetime
     time_left: str
-    
-    # Цены
     current_price: Decimal
     best_price: Decimal
     base_price: Decimal
     savings_percent: float
-    
-    # Товар
     product_id: int
     product_name: str
     product_image: Optional[str] = None
-    
-    # Организатор
     creator_id: int
     creator_name: Optional[str] = None
 
 
 class GroupListResponse(BaseModel):
-    """Ответ со списком сборов."""
     items: List[GroupListItem]
     total: int
     page: int
@@ -120,9 +106,6 @@ class GroupListResponse(BaseModel):
 
 
 class GroupDetailResponse(BaseModel):
-    """
-    Детальная информация о сборе.
-    """
     id: int
     status: GroupStatus
     current_count: int
@@ -132,48 +115,33 @@ class GroupDetailResponse(BaseModel):
     deadline: datetime
     time_left: str
     created_at: datetime
-    
-    # Цены
     current_price: Decimal
     best_price: Decimal
     base_price: Decimal
     savings_amount: Decimal
     savings_percent: float
-    
-    # До следующего порога
     next_tier_price: Optional[Decimal] = None
     next_tier_quantity: Optional[int] = None
     people_to_next_tier: Optional[int] = None
-    
-    # Прогресс по порогам
     tiers_progress: List[TierProgress] = []
-    
-    # Товар
     product_id: int
     product_name: str
     product_description: Optional[str] = None
     product_image: Optional[str] = None
     product_images: List[str] = []
     price_tiers: List[PriceTier] = []
-    
-    # Организатор
     creator_id: int
     creator_name: Optional[str] = None
     creator_username: Optional[str] = None
-    
-    # Для текущего пользователя
     is_member: bool = False
     is_creator: bool = False
     user_invited_count: int = 0
     can_join: bool = True
-    
-    # Для шеринга
     share_text: Optional[str] = None
     share_url: Optional[str] = None
 
 
 class CreateGroupRequest(BaseModel):
-    """Запрос на создание сбора."""
     product_id: int = Field(..., description="ID товара")
     min_participants: Optional[int] = Field(None, ge=2, le=100, description="Минимум участников")
     max_participants: Optional[int] = Field(None, ge=2, le=500, description="Максимум участников")
@@ -181,20 +149,17 @@ class CreateGroupRequest(BaseModel):
 
 
 class CreateGroupResponse(BaseModel):
-    """Ответ при создании сбора."""
     success: bool
     group_id: Optional[int] = None
     message: str
 
 
 class JoinGroupRequest(BaseModel):
-    """Запрос на присоединение к сбору."""
     invited_by_user_id: Optional[int] = Field(None, description="ID пригласившего")
     start_param: Optional[str] = Field(None, description="Параметр из deep link")
 
 
 class JoinGroupResponse(BaseModel):
-    """Ответ при присоединении к сбору."""
     success: bool
     group_id: int
     current_count: int
@@ -205,14 +170,12 @@ class JoinGroupResponse(BaseModel):
 
 
 class ShareDataResponse(BaseModel):
-    """Данные для шеринга сбора."""
     text: str
     url: str
     button_text: str
 
 
 class MyGroupsResponse(BaseModel):
-    """Мои сборы по категориям."""
     active: List[GroupListItem]
     completed: List[GroupListItem]
     organized: List[GroupListItem]
@@ -223,24 +186,18 @@ class MyGroupsResponse(BaseModel):
 # ============================================================
 
 def format_time_left(deadline) -> str:
-    """Форматировать оставшееся время."""
     if isinstance(deadline, str):
         deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
-    
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
-    
     now = datetime.now(timezone.utc)
     diff = deadline - now
-    
     if diff.total_seconds() <= 0:
         return "Завершён"
-    
     total_seconds = int(diff.total_seconds())
     days = total_seconds // 86400
     hours = (total_seconds % 86400) // 3600
     minutes = (total_seconds % 3600) // 60
-    
     if days > 0:
         return f"{days}д {hours}ч"
     elif hours > 0:
@@ -249,26 +206,17 @@ def format_time_left(deadline) -> str:
         return f"{minutes}м"
 
 
-def build_group_list_item(
-    group_data: dict,
-    product_data: dict,
-    creator_data: Optional[dict] = None
-) -> GroupListItem:
-    """Построить элемент списка сборов."""
+def build_group_list_item(group_data, product_data, creator_data=None):
     price_tiers = product_data.get("price_tiers", [])
     base_price = Decimal(str(product_data.get("base_price", 0)))
     current_count = group_data.get("current_count", 0)
     max_participants = group_data.get("max_participants", 100)
-    
     current_price = calculate_current_price(price_tiers, current_count, base_price)
     best_price = get_best_price(price_tiers) if price_tiers else base_price
-    
     progress = (current_count / max_participants * 100) if max_participants > 0 else 0
-    
     savings_percent = 0
     if base_price > 0:
         savings_percent = float((base_price - current_price) / base_price * 100)
-    
     return GroupListItem(
         id=group_data["id"],
         status=GroupStatus(group_data.get("status", "active")),
@@ -294,68 +242,28 @@ def build_group_list_item(
 # ЭНДПОИНТЫ: СПИСОК СБОРОВ
 # ============================================================
 
-@router.get(
-    "",
-    response_model=GroupListResponse,
-    summary="Список активных сборов",
-    description="""
-    Возвращает список активных групповых сборов.
-    
-    **Сортировка:**
-    - `popular` — по количеству участников
-    - `ending_soon` — скоро заканчиваются
-    - `new` — недавно созданные
-    - `almost_done` — близкие к завершению (>80%)
-    
-    **Фильтры:**
-    - `category_id` — категория товара
-    - `min_participants` — минимум участников
-    """
-)
+@router.get("", response_model=GroupListResponse, summary="Список активных сборов")
 async def get_groups(
-    # Фильтры
     category_id: Optional[int] = Query(None, description="Категория товара"),
     product_id: Optional[int] = Query(None, description="ID товара"),
     status: str = Query("active", regex="^(active|completed|all)$", description="Статус сбора"),
-    
-    # Сортировка
-    sort_by: str = Query(
-        "popular",
-        regex="^(popular|ending_soon|new|almost_done)$",
-        description="Сортировка"
-    ),
-    
-    # Пагинация
+    sort_by: str = Query("popular", regex="^(popular|ending_soon|new|almost_done)$", description="Сортировка"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    
-    # Авторизация (опциональная)
     user_id: Optional[int] = Depends(get_current_user_optional)
 ):
-    """
-    Получить список сборов.
-    """
     db = get_db()
-    
-    # Базовый запрос
     query = db.table("groups").select(
         "*, products(id, name, image_url, base_price, price_tiers, category_id), "
         "users!groups_creator_id_fkey(id, first_name)",
         count="exact"
     )
-    
-    # Фильтр по статусу
     if status == "active":
         query = query.eq("status", "active")
     elif status == "completed":
         query = query.eq("status", "completed")
-    # "all" — без фильтра
-    
-    # Фильтр по товару
     if product_id:
         query = query.eq("product_id", product_id)
-    
-    # Сортировка
     if sort_by == "popular":
         query = query.order("current_count", desc=True)
     elif sort_by == "ending_soon":
@@ -364,94 +272,49 @@ async def get_groups(
         query = query.order("created_at", desc=True)
     elif sort_by == "almost_done":
         query = query.order("current_count", desc=True)
-    
-    # Пагинация
     offset = (page - 1) * per_page
     query = query.range(offset, offset + per_page - 1)
-    
     result = query.execute()
-    
-    # Фильтруем по категории (после запроса, т.к. это связанная таблица)
     items = []
     for group_data in (result.data or []):
         product_data = group_data.get("products", {})
-        
-        # Фильтр по категории
         if category_id and product_data.get("category_id") != category_id:
             continue
-        
         creator_data = group_data.get("users", {})
-        
-        # Фильтр "almost_done" — только >80%
         if sort_by == "almost_done":
             max_p = group_data.get("max_participants", 100)
             current = group_data.get("current_count", 0)
             if max_p > 0 and (current / max_p) < 0.8:
                 continue
-        
         items.append(build_group_list_item(group_data, product_data, creator_data))
-    
-    return GroupListResponse(
-        items=items,
-        total=result.count or 0,
-        page=page,
-        per_page=per_page
-    )
+    return GroupListResponse(items=items, total=result.count or 0, page=page, per_page=per_page)
 
 
-@router.get(
-    "/hot",
-    response_model=List[GroupListItem],
-    summary="Горячие сборы",
-    description="Сборы, которые скоро завершатся или близки к цели."
-)
-async def get_hot_groups(
-    limit: int = Query(10, ge=1, le=50)
-):
-    """
-    Получить горячие сборы.
-    
-    Критерии:
-    - Прогресс > 70%
-    - Или до дедлайна < 24 часа
-    """
+@router.get("/hot", response_model=List[GroupListItem], summary="Горячие сборы")
+async def get_hot_groups(limit: int = Query(10, ge=1, le=50)):
     db = get_db()
-    
-    # Получаем активные сборы
     result = (
         db.table("groups")
         .select("*, products(id, name, image_url, base_price, price_tiers)")
         .eq("status", "active")
         .order("current_count", desc=True)
-        .limit(limit * 2)  # Берём с запасом для фильтрации
+        .limit(limit * 2)
         .execute()
     )
-    
     now = datetime.now(timezone.utc)
     hot_groups = []
-    
     for group_data in (result.data or []):
         product_data = group_data.get("products", {})
-        
-        # Проверяем критерии "горячести"
         max_p = group_data.get("max_participants", 100)
         current = group_data.get("current_count", 0)
         progress = (current / max_p) if max_p > 0 else 0
-        
-        deadline = datetime.fromisoformat(
-            group_data["deadline"].replace("Z", "+00:00")
-        )
+        deadline = datetime.fromisoformat(group_data["deadline"].replace("Z", "+00:00"))
         hours_left = (deadline - now).total_seconds() / 3600
-        
-        # Горячий если прогресс > 70% или осталось < 24 часа
         is_hot = progress > 0.7 or (0 < hours_left < 24)
-        
         if is_hot:
             hot_groups.append(build_group_list_item(group_data, product_data))
-        
         if len(hot_groups) >= limit:
             break
-    
     return hot_groups
 
 
@@ -459,22 +322,12 @@ async def get_hot_groups(
 # ЭНДПОИНТЫ: ДЕТАЛИ СБОРА
 # ============================================================
 
-@router.get(
-    "/{group_id}",
-    response_model=GroupDetailResponse,
-    summary="Детали сбора",
-    description="Полная информация о групповом сборе."
-)
+@router.get("/{group_id}", response_model=GroupDetailResponse, summary="Детали сбора")
 async def get_group_detail(
     group_id: int,
     user_id: Optional[int] = Depends(get_current_user_optional)
 ):
-    """
-    Получить детальную информацию о сборе.
-    """
     db = get_db()
-    
-    # Получаем сбор с товаром и создателем
     result = (
         db.table("groups")
         .select(
@@ -486,105 +339,53 @@ async def get_group_detail(
         .limit(1)
         .execute()
     )
-    
     if not result.data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Сбор не найден"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сбор не найден")
+
     group_data = result.data[0]
     product_data = group_data.get("products", {})
     creator_data = group_data.get("users", {})
-    
-    # Рассчитываем цены
     price_tiers = product_data.get("price_tiers", [])
     base_price = Decimal(str(product_data.get("base_price", 0)))
     current_count = group_data.get("current_count", 0)
     max_participants = group_data.get("max_participants", 100)
-    
     price_info = get_full_price_info(price_tiers, base_price, current_count)
     tiers_progress = get_tiers_progress(price_tiers, current_count)
-    
     progress = (current_count / max_participants * 100) if max_participants > 0 else 0
-    
-    # Проверяем участие текущего пользователя
+
     is_member = False
     is_creator = False
     user_invited_count = 0
     can_join = group_data.get("status") == "active"
-    
     if user_id:
         is_creator = group_data.get("creator_id") == user_id
-        
-        # Проверяем членство
-        membership = (
-            db.table("group_members")
-            .select("id")
-            .eq("group_id", group_id)
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
+        membership = db.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).limit(1).execute()
         is_member = bool(membership.data)
-        
         if is_member:
             can_join = False
-        
-        # Считаем приглашённых
-        invited = (
-            db.table("group_members")
-            .select("id", count="exact")
-            .eq("group_id", group_id)
-            .eq("invited_by_user_id", user_id)
-            .execute()
-        )
+        invited = db.table("group_members").select("id", count="exact").eq("group_id", group_id).eq("invited_by_user_id", user_id).execute()
         user_invited_count = invited.count or 0
-    
-    # Формируем ценовые пороги
-    price_tier_objects = [
-        PriceTier(min_quantity=t["min_quantity"], price=Decimal(str(t["price"])))
-        for t in price_tiers
-    ]
-    
+
+    price_tier_objects = [PriceTier(min_quantity=t["min_quantity"], price=Decimal(str(t["price"]))) for t in price_tiers]
+
     return GroupDetailResponse(
-        id=group_data["id"],
-        status=GroupStatus(group_data.get("status", "active")),
-        current_count=current_count,
-        min_participants=group_data.get("min_participants", 3),
-        max_participants=max_participants,
-        progress_percent=round(progress, 1),
-        deadline=group_data.get("deadline"),
-        time_left=format_time_left(group_data.get("deadline")),
+        id=group_data["id"], status=GroupStatus(group_data.get("status", "active")),
+        current_count=current_count, min_participants=group_data.get("min_participants", 3),
+        max_participants=max_participants, progress_percent=round(progress, 1),
+        deadline=group_data.get("deadline"), time_left=format_time_left(group_data.get("deadline")),
         created_at=group_data.get("created_at"),
-        
-        current_price=price_info.current_price,
-        best_price=price_info.best_price,
-        base_price=price_info.base_price,
-        savings_amount=price_info.savings_amount,
+        current_price=price_info.current_price, best_price=price_info.best_price,
+        base_price=price_info.base_price, savings_amount=price_info.savings_amount,
         savings_percent=price_info.savings_percent,
-        
-        next_tier_price=price_info.next_tier_price,
-        next_tier_quantity=price_info.next_tier_quantity,
-        people_to_next_tier=price_info.people_to_next_tier,
-        
-        tiers_progress=tiers_progress,
-        
-        product_id=product_data.get("id", 0),
-        product_name=product_data.get("name", ""),
-        product_description=product_data.get("description"),
-        product_image=product_data.get("image_url"),
-        product_images=product_data.get("images", []),
-        price_tiers=price_tier_objects,
-        
-        creator_id=creator_data.get("id", 0),
-        creator_name=creator_data.get("first_name"),
+        next_tier_price=price_info.next_tier_price, next_tier_quantity=price_info.next_tier_quantity,
+        people_to_next_tier=price_info.people_to_next_tier, tiers_progress=tiers_progress,
+        product_id=product_data.get("id", 0), product_name=product_data.get("name", ""),
+        product_description=product_data.get("description"), product_image=product_data.get("image_url"),
+        product_images=product_data.get("images", []), price_tiers=price_tier_objects,
+        creator_id=creator_data.get("id", 0), creator_name=creator_data.get("first_name"),
         creator_username=creator_data.get("username"),
-        
-        is_member=is_member,
-        is_creator=is_creator,
-        user_invited_count=user_invited_count,
-        can_join=can_join
+        is_member=is_member, is_creator=is_creator,
+        user_invited_count=user_invited_count, can_join=can_join
     )
 
 
@@ -597,124 +398,56 @@ async def get_group_detail(
     response_model=CreateGroupResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Создать сбор",
-    description="""
-    Создать новый групповой сбор.
-    
-    **Требования:**
-    - Авторизация
-    - Товар должен быть активен
-    - На товар не должно быть активного сбора
-    """
 )
-@limiter.limit(create_limit)  # 3 запроса/минуту — антиспам
+@limiter.limit(create_limit)
 async def create_group(
     request: Request,
     body: CreateGroupRequest,
     user_id: int = Depends(get_current_user)
 ):
-    """
-    Создать новый сбор.
-    """
     manager = get_group_manager()
-    
     result = await manager.create_group(
-        product_id=body.product_id,
-        creator_id=user_id,
-        min_participants=body.min_participants,
-        max_participants=body.max_participants,
+        product_id=body.product_id, creator_id=user_id,
+        min_participants=body.min_participants, max_participants=body.max_participants,
         deadline_days=body.deadline_days
     )
-    
     if not result.success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result.message
-        )
-    
-    return CreateGroupResponse(
-        success=True,
-        group_id=result.group_id,
-        message=result.message
-    )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+    return CreateGroupResponse(success=True, group_id=result.group_id, message=result.message)
 
 
-@router.post(
-    "/{group_id}/join",
-    response_model=JoinGroupResponse,
-    summary="Присоединиться к сбору",
-    description="""
-    Присоединиться к групповому сбору.
-    
-    **Параметры:**
-    - `invited_by_user_id` — ID пригласившего (опционально)
-    - `start_param` — параметр из deep link (парсится автоматически)
-    
-    **Уведомления:**
-    После успешного присоединения организатор получает push-уведомление
-    в Telegram о новом участнике.
-    """
-)
+@router.post("/{group_id}/join", response_model=JoinGroupResponse, summary="Присоединиться к сбору")
 async def join_group(
     group_id: int,
     background_tasks: BackgroundTasks,
     join_request: JoinGroupRequest = JoinGroupRequest(),
     user_id: int = Depends(get_current_user)
 ):
-    """
-    Присоединиться к сбору.
-    
-    После успешного присоединения организатор получает уведомление в Telegram.
-    Уведомление отправляется в фоне (background_tasks), чтобы не замедлять ответ.
-    """
-    # Парсим start_param если есть
     invited_by = join_request.invited_by_user_id
-    
     if join_request.start_param and not invited_by:
         parsed = parse_start_param(join_request.start_param)
         invited_by = parsed.get("referrer_id")
-    
-    # Нельзя пригласить самого себя
     if invited_by == user_id:
         invited_by = None
-    
+
     manager = get_group_manager()
-    
-    result = await manager.join_group(
-        group_id=group_id,
-        user_id=user_id,
-        invited_by_user_id=invited_by
-    )
-    
+    result = await manager.join_group(group_id=group_id, user_id=user_id, invited_by_user_id=invited_by)
     if not result.success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result.message
-        )
-    
-    # ============================================================
-    # УВЕДОМЛЕНИЕ ОРГАНИЗАТОРУ
-    # ============================================================
-    # Отправляем в фоновом режиме, чтобы не замедлять ответ пользователю.
-    # Организатор увидит в Telegram: "К вашему сбору присоединился Маша!"
-    
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+
     if NOTIFICATIONS_ENABLED:
-        background_tasks.add_task(
-            notify_on_join,
-            group_id=group_id,
-            new_member_id=user_id,
-            invited_by_id=invited_by
-        )
-    
+        background_tasks.add_task(notify_on_join, group_id=group_id, new_member_id=user_id, invited_by_id=invited_by)
+
     return JoinGroupResponse(
-        success=True,
-        group_id=result.group_id,
-        current_count=result.current_count,
-        current_price=result.current_price,
-        previous_price=result.previous_price,
-        price_dropped=result.price_dropped,
-        message=result.message
+        success=True, group_id=result.group_id, current_count=result.current_count,
+        current_price=result.current_price, previous_price=result.previous_price,
+        price_dropped=result.price_dropped, message=result.message
     )
 
+
+# ============================================================
+# ВЫХОД ИЗ СБОРА (Спринт 2 — пересчёт цены)
+# ============================================================
 
 @router.post(
     "/{group_id}/leave",
@@ -725,6 +458,10 @@ async def join_group(
     **Ограничения:**
     - Нельзя покинуть завершённый сбор
     - Создатель не может покинуть свой сбор
+    
+    **При выходе (Спринт 2):**
+    - Цена пересчитывается для всех оставшихся участников
+    - Если цена выросла — информация возвращается в ответе
     """
 )
 async def leave_group(
@@ -732,14 +469,18 @@ async def leave_group(
     user_id: int = Depends(get_current_user)
 ):
     """
-    Покинуть сбор.
+    Покинуть сбор с пересчётом цены.
+    
+    Аналогия: вас было 10 человек и пицца стоила 100₽ каждому.
+    Один ушёл → осталось 9 → теперь 111₽ каждому. Честно предупредить!
     """
     db = get_db()
     
-    # Проверяем сбор
+    # Получаем сбор С ТОВАРОМ (нужно для пересчёта цены)
     group = (
         db.table("groups")
-        .select("status, creator_id")
+        .select("status, creator_id, current_count, min_participants, "
+                "product_id, products(base_price, price_tiers)")
         .eq("id", group_id)
         .limit(1)
         .execute()
@@ -781,188 +522,127 @@ async def leave_group(
             detail="Вы не участвуете в этом сборе"
         )
     
+    # ============================================================
+    # ПЕРЕСЧЁТ ЦЕНЫ (Спринт 2)
+    # ============================================================
+    # Аналогия: 10 человек скидывались по 100₽. Один ушёл →
+    # 9 человек → теперь по 111₽. Считаем разницу и предупреждаем.
+    
+    product_data = group_data.get("products", {})
+    price_tiers = product_data.get("price_tiers", [])
+    base_price = Decimal(str(product_data.get("base_price", 0)))
+    old_count = group_data["current_count"]
+    
+    # Цена ДО выхода
+    old_price = calculate_current_price(price_tiers, old_count, base_price)
+    
     # Удаляем из участников
     db.table("group_members").delete().eq("group_id", group_id).eq("user_id", user_id).execute()
     
-    # Счётчик обновится автоматически триггером
+    # Обновляем счётчик вручную (для надёжности, не полагаемся только на триггер)
+    new_count = max(0, old_count - 1)
+    db.table("groups").update({
+        "current_count": new_count
+    }).eq("id", group_id).execute()
     
-    return {"success": True, "message": "Вы покинули сбор"}
+    # Цена ПОСЛЕ выхода
+    new_price = calculate_current_price(price_tiers, new_count, base_price)
+    price_increased = new_price > old_price
+    
+    # Формируем ответ
+    result = {
+        "success": True,
+        "message": "Вы покинули сбор",
+        "participants_left": new_count,
+    }
+    
+    if price_increased:
+        result["price_changed"] = True
+        result["old_price"] = float(old_price)
+        result["new_price"] = float(new_price)
+        result["message"] = (
+            f"Вы покинули сбор. Цена для остальных участников "
+            f"выросла с {int(old_price):,}₽ до {int(new_price):,}₽".replace(",", " ")
+        )
+    
+    return result
 
 
-@router.post(
-    "/{group_id}/cancel",
-    summary="Отменить сбор",
-    description="Отменить сбор. Доступно только создателю."
-)
+@router.post("/{group_id}/cancel", summary="Отменить сбор")
 async def cancel_group(
     group_id: int,
     user_id: int = Depends(get_current_user)
 ):
-    """
-    Отменить сбор.
-    """
     manager = get_group_manager()
-    
     try:
         result = await manager.cancel_group(group_id, user_id)
     except PermissionError as e:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    
-    return {
-        "success": True,
-        "old_status": result.old_status,
-        "new_status": result.new_status,
-        "message": "Сбор отменён"
-    }
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return {"success": True, "old_status": result.old_status, "new_status": result.new_status, "message": "Сбор отменён"}
 
 
 # ============================================================
-# ЭНДПОИНТЫ: ШЕРИНГ
+# ШЕРИНГ
 # ============================================================
 
-@router.get(
-    "/{group_id}/share",
-    response_model=ShareDataResponse,
-    summary="Данные для шеринга",
-    description="Получить текст и ссылку для шеринга сбора."
-)
+@router.get("/{group_id}/share", response_model=ShareDataResponse, summary="Данные для шеринга")
 async def get_share_data(
     group_id: int,
     user_id: int = Depends(get_current_user)
 ):
-    """
-    Получить данные для шеринга.
-    """
     manager = get_group_manager()
-    
-    # TODO: Получить username бота из настроек
-    bot_username = "drujno_bot"  # Заменить на реальный
-    
+    bot_username = "drujno_bot"
     try:
         data = await manager.get_share_data(group_id, user_id, bot_username)
     except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     return ShareDataResponse(**data)
 
 
 # ============================================================
-# ЭНДПОИНТЫ: МОИ СБОРЫ
+# МОИ СБОРЫ
 # ============================================================
 
-@router.get(
-    "/my/all",
-    response_model=MyGroupsResponse,
-    summary="Мои сборы",
-    description="Сборы, в которых я участвую или которые я создал."
-)
-async def get_my_groups(
-    user_id: int = Depends(get_current_user)
-):
-    """
-    Получить мои сборы.
-    """
+@router.get("/my/all", response_model=MyGroupsResponse, summary="Мои сборы")
+async def get_my_groups(user_id: int = Depends(get_current_user)):
     db = get_db()
-    
-    # Сборы где я участник
-    memberships = (
-        db.table("group_members")
-        .select("group_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    
+    memberships = db.table("group_members").select("group_id").eq("user_id", user_id).execute()
     group_ids = [m["group_id"] for m in (memberships.data or [])]
-    
     active = []
     completed = []
     organized = []
-    
     if group_ids:
-        # Получаем эти сборы
-        groups = (
-            db.table("groups")
-            .select("*, products(id, name, image_url, base_price, price_tiers)")
-            .in_("id", group_ids)
-            .execute()
-        )
-        
+        groups = db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").in_("id", group_ids).execute()
         for group_data in (groups.data or []):
             product_data = group_data.get("products", {})
             item = build_group_list_item(group_data, product_data)
-            
             if group_data["status"] == "active":
                 active.append(item)
             elif group_data["status"] == "completed":
                 completed.append(item)
-    
-    # Сборы где я организатор
-    my_groups = (
-        db.table("groups")
-        .select("*, products(id, name, image_url, base_price, price_tiers)")
-        .eq("creator_id", user_id)
-        .execute()
-    )
-    
+    my_groups = db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").eq("creator_id", user_id).execute()
     for group_data in (my_groups.data or []):
         product_data = group_data.get("products", {})
         item = build_group_list_item(group_data, product_data)
         organized.append(item)
-    
-    return MyGroupsResponse(
-        active=active,
-        completed=completed,
-        organized=organized
-    )
+    return MyGroupsResponse(active=active, completed=completed, organized=organized)
 
 
 # ============================================================
-# ЭНДПОИНТЫ: УЧАСТНИКИ
+# УЧАСТНИКИ
 # ============================================================
 
-@router.get(
-    "/{group_id}/members",
-    summary="Участники сбора",
-    description="Список участников сбора."
-)
+@router.get("/{group_id}/members", summary="Участники сбора")
 async def get_group_members(
     group_id: int,
     user_id: Optional[int] = Depends(get_current_user_optional)
 ):
-    """
-    Получить список участников.
-    
-    Показывает только имена и когда присоединились.
-    """
     db = get_db()
-    
-    # Проверяем сбор
-    group = (
-        db.table("groups")
-        .select("id")
-        .eq("id", group_id)
-        .limit(1)
-        .execute()
-    )
-    
+    group = db.table("groups").select("id").eq("id", group_id).limit(1).execute()
     if not group.data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Сбор не найден"
-        )
-    
-    # Получаем участников
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сбор не найден")
     members = (
         db.table("group_members")
         .select("user_id, joined_at, users(first_name, username)")
@@ -970,7 +650,6 @@ async def get_group_members(
         .order("joined_at", desc=False)
         .execute()
     )
-    
     result = []
     for member in (members.data or []):
         user_data = member.get("users", {})
@@ -980,9 +659,4 @@ async def get_group_members(
             "joined_at": member["joined_at"],
             "is_me": member["user_id"] == user_id if user_id else False
         })
-    
-    return {
-        "group_id": group_id,
-        "total": len(result),
-        "members": result
-    }
+    return {"group_id": group_id, "total": len(result), "members": result}

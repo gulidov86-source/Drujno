@@ -10,6 +10,9 @@
 - Расчёт бонусов организатора
 - Проверку просроченных сборов (для cron)
 
+ОБНОВЛЕНО (Спринт 2): join_group использует SELECT FOR UPDATE
+через SQL-функцию join_group_atomic для защиты от race condition.
+
 Жизненный цикл сбора:
     1. ACTIVE — идёт набор участников
     2. COMPLETED — набрали минимум, сбор успешен
@@ -264,7 +267,7 @@ class GroupManager:
         )
     
     # ============================================================
-    # ПРИСОЕДИНЕНИЕ К СБОРУ
+    # ПРИСОЕДИНЕНИЕ К СБОРУ (Спринт 2 — SELECT FOR UPDATE)
     # ============================================================
     
     async def join_group(
@@ -276,6 +279,13 @@ class GroupManager:
         """
         Присоединиться к групповому сбору.
         
+        ОБНОВЛЕНО (Спринт 2): Использует SQL-функцию join_group_atomic
+        с SELECT FOR UPDATE для защиты от race condition.
+        
+        Аналогия: раньше два человека могли одновременно «пройти в дверь»
+        и счётчик обновлялся неверно. Теперь — турникет: пока один проходит,
+        второй ждёт в очереди.
+        
         Параметры:
             group_id: ID сбора
             user_id: ID пользователя
@@ -283,18 +293,8 @@ class GroupManager:
         
         Возвращает:
             JoinResult: Результат присоединения
-        
-        Логика:
-            1. Проверяем существование сбора
-            2. Проверяем, что сбор активен
-            3. Проверяем, что пользователь ещё не участвует
-            4. Проверяем, что не превышен лимит
-            5. Добавляем участника
-            6. Обновляем счётчик (триггер в БД)
-            7. Проверяем, не пора ли закрыть сбор
-            8. Обновляем статистику рефералов
         """
-        # 1. Получаем сбор с товаром
+        # 1. Получаем сбор с товаром (для расчёта цен)
         group = (
             self.db.table("groups")
             .select("*, products(base_price, price_tiers)")
@@ -343,37 +343,6 @@ class GroupManager:
                 message="Время сбора истекло"
             )
         
-        # 3. Проверяем, не участвует ли уже
-        existing_member = (
-            self.db.table("group_members")
-            .select("id")
-            .eq("group_id", group_id)
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
-        
-        if existing_member.data:
-            return JoinResult(
-                success=False,
-                group_id=group_id,
-                user_id=user_id,
-                current_count=group_data["current_count"],
-                current_price=Decimal("0"),
-                message="Вы уже участвуете в этом сборе"
-            )
-        
-        # 4. Проверяем лимит
-        if group_data["current_count"] >= group_data["max_participants"]:
-            return JoinResult(
-                success=False,
-                group_id=group_id,
-                user_id=user_id,
-                current_count=group_data["current_count"],
-                current_price=Decimal("0"),
-                message="Сбор уже заполнен"
-            )
-        
         # Получаем данные о ценах
         product_data = group_data.get("products", {})
         price_tiers = product_data.get("price_tiers", [])
@@ -383,16 +352,113 @@ class GroupManager:
         old_count = group_data["current_count"]
         old_price = calculate_current_price(price_tiers, old_count, base_price)
         
-        # 5. Добавляем участника
-        self.db.table("group_members").insert({
-            "group_id": group_id,
-            "user_id": user_id,
-            "invited_by_user_id": invited_by_user_id
-        }).execute()
+        # ============================================================
+        # 5. ДОБАВЛЯЕМ УЧАСТНИКА АТОМАРНО (Спринт 2)
+        # ============================================================
+        # Используем SQL-функцию join_group_atomic с SELECT FOR UPDATE.
+        #
+        # Аналогия: турникет в метро. Пока один человек проходит,
+        # второй ждёт. Нельзя пройти вдвоём одновременно.
+        #
+        # Если SQL-функция не создана или упала — используем старый код
+        # (fallback). Безопасно, но без защиты от race condition.
         
-        # Счётчик обновится автоматически триггером в БД
-        # Но для ответа нам нужно новое значение
-        new_count = old_count + 1
+        use_fallback = False
+        new_count = old_count + 1  # значение по умолчанию
+        
+        try:
+            rpc_result = self.db.rpc("join_group_atomic", {
+                "p_group_id": group_id,
+                "p_user_id": user_id,
+                "p_invited_by": invited_by_user_id
+            }).execute()
+            
+            if rpc_result.data:
+                rpc_data = rpc_result.data
+                
+                # Проверяем что rpc_data — dict (а не список и не строка)
+                if isinstance(rpc_data, list) and len(rpc_data) > 0:
+                    rpc_data = rpc_data[0] if isinstance(rpc_data[0], dict) else rpc_data
+                
+                if isinstance(rpc_data, dict) and not rpc_data.get("success", True):
+                    # SQL-функция вернула ошибку (already_member, group_full и т.д.)
+                    error_code = rpc_data.get("error", "unknown")
+                    error_messages = {
+                        "group_not_found": "Сбор не найден",
+                        "group_not_active": "Сбор недоступен",
+                        "group_expired": "Время сбора истекло",
+                        "group_full": "Сбор уже заполнен",
+                        "already_member": "Вы уже участвуете в этом сборе",
+                    }
+                    return JoinResult(
+                        success=False,
+                        group_id=group_id,
+                        user_id=user_id,
+                        current_count=group_data["current_count"],
+                        current_price=Decimal("0"),
+                        message=error_messages.get(error_code, rpc_data.get("message", "Ошибка присоединения"))
+                    )
+                
+                # Успешно присоединились через атомарный путь
+                if isinstance(rpc_data, dict):
+                    new_count = rpc_data.get("new_count", old_count + 1)
+                
+                print(f"[GroupManager] ✅ join_group_atomic: user={user_id} → group={group_id}, count={new_count}")
+            else:
+                # Пустой ответ от RPC — используем fallback
+                raise Exception("Empty RPC result")
+                
+        except Exception as e:
+            # ============================================================
+            # FALLBACK: старый код без SELECT FOR UPDATE
+            # ============================================================
+            # Если SQL-функция join_group_atomic ещё не создана в Supabase
+            # или произошла ошибка — используем старый способ.
+            # Работает, но без защиты от race condition.
+            
+            print(f"[GroupManager] ⚠️ join_group_atomic fallback: {e}")
+            use_fallback = True
+            
+            # Повторяем проверки которые делала бы SQL-функция
+            # 3. Проверяем, не участвует ли уже
+            existing_member = (
+                self.db.table("group_members")
+                .select("id")
+                .eq("group_id", group_id)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            
+            if existing_member.data:
+                return JoinResult(
+                    success=False,
+                    group_id=group_id,
+                    user_id=user_id,
+                    current_count=group_data["current_count"],
+                    current_price=Decimal("0"),
+                    message="Вы уже участвуете в этом сборе"
+                )
+            
+            # 4. Проверяем лимит
+            if group_data["current_count"] >= group_data["max_participants"]:
+                return JoinResult(
+                    success=False,
+                    group_id=group_id,
+                    user_id=user_id,
+                    current_count=group_data["current_count"],
+                    current_price=Decimal("0"),
+                    message="Сбор уже заполнен"
+                )
+            
+            # Добавляем участника (старый способ)
+            self.db.table("group_members").insert({
+                "group_id": group_id,
+                "user_id": user_id,
+                "invited_by_user_id": invited_by_user_id
+            }).execute()
+            
+            new_count = old_count + 1
         
         # Цена ПОСЛЕ присоединения
         new_price = calculate_current_price(price_tiers, new_count, base_price)
