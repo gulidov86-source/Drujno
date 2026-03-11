@@ -543,6 +543,46 @@ function groupStatusInfo(status) {
     return info[status] || { emoji: '❓', text: status, color: '' };
 }
 
+
+function withErrorBoundary(renderFn, ...args) {
+    try {
+        const result = renderFn(...args);
+        // Если функция async — ловим промис
+        if (result && typeof result.catch === 'function') {
+            result.catch(err => _showErrorScreen(err, renderFn, args));
+        }
+    } catch (err) {
+        _showErrorScreen(err, renderFn, args);
+    }
+}
+
+function _showErrorScreen(err, retryFn, retryArgs) {
+    console.error('❌ Ошибка страницы:', err);
+    const app = document.getElementById('app');
+    if (!app) return;
+    
+    const isNetwork = err.message === 'Нет связи с сервером' || err.code === 'NETWORK_ERROR';
+    
+    app.innerHTML = `
+        <div class="error-boundary">
+            <div class="error-boundary__icon">${isNetwork ? '📡' : '😕'}</div>
+            <div class="error-boundary__title">Не удалось загрузить</div>
+            <div class="error-boundary__text">${
+                isNetwork 
+                    ? 'Проверьте интернет-соединение' 
+                    : 'Что-то пошло не так. Попробуйте ещё раз'
+            }</div>
+            <button class="btn btn-primary" id="error-retry-btn">🔄 Попробовать снова</button>
+        </div>`;
+    
+    document.getElementById('error-retry-btn')?.addEventListener('click', () => {
+        app.innerHTML = '<div style="display:flex;justify-content:center;padding:60px"><div class="spinner"></div></div>';
+        // Небольшая задержка чтобы спиннер успел показаться
+        setTimeout(() => withErrorBoundary(retryFn, ...retryArgs), 100);
+    });
+}
+
+
 // ─── Экспорт ───
 export {
     router,
@@ -558,6 +598,7 @@ export {
     hideLoading,
     productCardSkeleton,
     hotGroupCardSkeleton,
+	withErrorBoundary 
     escapeHtml,
     debounce,
     setActiveNav,

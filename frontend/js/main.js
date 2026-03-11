@@ -53,27 +53,25 @@ async function init() {
 
     // 4. Маршруты
     router
-        .on('', () => renderHome())
-        .on('catalog', () => renderCatalog())
-        .on('product/:id', (p) => renderProduct(p.id))
-        .on('group/:id', (p) => renderGroup(p.id))
-        .on('checkout/:groupId', (p) => renderCheckout(p.groupId))
-        .on('orders', () => renderOrders())
-        .on('order/:id', (p) => renderOrder(p.id))
-        .on('profile', () => renderProfile())
-        .on('addresses', () => renderAddresses())
-        .on('groups', () => renderMyGroups())
-        // Новые маршруты — Этап 2
-        .on('returns', () => renderReturns())
-        .on('return/:id', (p) => renderReturn(p.id))
-        .on('support', () => renderSupport())
-        .on('support/create', () => renderSupportCreate())
-        .on('support/:id', (p) => renderSupportTicket(p.id))
-        .on('notifications', () => renderNotifications())
-        .on('faq', () => renderFAQ())
-        // Юридические страницы — Этап 3
-        .on('privacy', () => renderPrivacy())
-        .on('terms', () => renderTerms());
+        .on('', () => withErrorBoundary(renderHome))
+        .on('catalog', () => withErrorBoundary(renderCatalog))
+        .on('product/:id', (p) => withErrorBoundary(renderProduct, p.id))
+        .on('group/:id', (p) => withErrorBoundary(renderGroup, p.id))
+        .on('checkout/:groupId', (p) => withErrorBoundary(renderCheckout, p.groupId))
+        .on('orders', () => withErrorBoundary(renderOrders))
+        .on('order/:id', (p) => withErrorBoundary(renderOrder, p.id))
+        .on('profile', () => withErrorBoundary(renderProfile))
+        .on('addresses', () => withErrorBoundary(renderAddresses))
+        .on('groups', () => withErrorBoundary(renderMyGroups))
+        .on('returns', () => withErrorBoundary(renderReturns))
+        .on('return/:id', (p) => withErrorBoundary(renderReturn, p.id))
+        .on('support', () => withErrorBoundary(renderSupport))
+        .on('support/create', () => withErrorBoundary(renderSupportCreate))
+        .on('support/:id', (p) => withErrorBoundary(renderSupportTicket, p.id))
+        .on('notifications', () => withErrorBoundary(renderNotifications))
+        .on('faq', () => withErrorBoundary(renderFAQ))
+        .on('privacy', () => renderPrivacy())   // Статические — без boundary
+        .on('terms', () => renderTerms());       // Статические — без boundary
 
     // 5. Deep link
     const sp = getStartParam();

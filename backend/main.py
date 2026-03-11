@@ -285,7 +285,9 @@ async def get_config():
 #from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
 from routers import users, products, groups, orders, payments, delivery, returns, support, notifications
 from routers import analytics
+from routers import image_upload
 
+app.include_router(image_upload.router)
 app.include_router(users.router)
 app.include_router(products.router)
 app.include_router(groups.router)

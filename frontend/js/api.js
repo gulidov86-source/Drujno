@@ -224,6 +224,29 @@ const api = {
             } catch (e) { /* аналитика не должна ломать приложение */ }
         },
     },
+	admin: {
+        uploadImage: async (file, productId = null) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (productId) formData.append('product_id', productId);
+            
+            const url = `${BASE_URL}/api/admin/upload-image`;
+            const headers = {};
+            if (_token) headers['Authorization'] = `Bearer ${_token}`;
+            
+            const res = await fetch(url, {
+                method: 'POST',
+                headers,  // НЕ ставим Content-Type — FormData сам добавит с boundary
+                body: formData
+            });
+            
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new ApiError(err.detail || 'Ошибка загрузки', res.status);
+            }
+            return res.json();
+        },
+    },
 };
 
 function buildQuery(p) {

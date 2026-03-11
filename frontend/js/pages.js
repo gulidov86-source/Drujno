@@ -780,7 +780,70 @@ export async function renderCheckout(groupId) {
             }
         }
 
-        // ── Кнопка оплаты ──
+        // ── Модалка для сбора телефона (54-ФЗ) ──
+        async function ensurePhoneForReceipt() {
+            // Проверяем есть ли телефон у пользователя
+            const user = appState.user || getCachedUser();
+            if (user && user.phone) return true; // Телефон уже есть
+            
+            // Показываем модалку
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                overlay.innerHTML = `
+                    <div class="modal">
+                        <div class="modal__title">📱 Телефон для чека</div>
+                        <div class="modal__text">По закону 54-ФЗ для фискального чека нужен телефон или email.</div>
+                        <input type="tel" id="receipt-phone" class="input" 
+                               placeholder="+7 (999) 123-45-67" 
+                               style="margin:16px 0;width:100%"
+                               inputmode="tel">
+                        <div style="display:flex;gap:8px">
+                            <button class="btn btn-secondary" id="receipt-cancel" style="flex:1">Отмена</button>
+                            <button class="btn btn-primary" id="receipt-save" style="flex:1">Сохранить</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(overlay);
+                
+                // Фокус на поле
+                setTimeout(() => document.getElementById('receipt-phone')?.focus(), 100);
+                
+                document.getElementById('receipt-cancel')?.addEventListener('click', () => {
+                    overlay.remove();
+                    resolve(false);
+                });
+                
+                document.getElementById('receipt-save')?.addEventListener('click', async () => {
+                    const phone = document.getElementById('receipt-phone')?.value?.trim();
+                    if (!phone || phone.length < 10) {
+                        showToast('Введите корректный телефон', 'error');
+                        return;
+                    }
+                    
+                    try {
+                        // Сохраняем телефон в профиль
+                        await api.users.update({ phone });
+                        // Обновляем кеш
+                        if (appState.user) appState.user.phone = phone;
+                        overlay.remove();
+                        resolve(true);
+                    } catch (e) {
+                        showToast('Ошибка сохранения', 'error');
+                        resolve(false);
+                    }
+                });
+                
+                // Закрытие по клику на overlay
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        overlay.remove();
+                        resolve(false);
+                    }
+                });
+            });
+        }
+        
+        // ── Кнопка оплаты (обновлённая) ──
         document.getElementById('pay-btn')?.addEventListener('click', async () => {
             const canPay = state.deliveryMode === 'pvz' 
                 ? !!state.selectedPvz 
@@ -791,18 +854,19 @@ export async function renderCheckout(groupId) {
                 return;
             }
             
+            // ===== СПРИНТ 3: Проверяем телефон для чека =====
+            const hasPhone = await ensurePhoneForReceipt();
+            if (!hasPhone) return; // Пользователь отменил
+            
             haptic('medium');
             const btn = document.getElementById('pay-btn');
             btn.disabled = true;
             btn.textContent = '⏳ Обработка...';
             
             try {
-                // Для ПВЗ — нам нужен адрес в БД
-                // Если выбран ПВЗ, используем первый адрес или создаём временный
                 let addressId = state.selectedAddr;
                 
                 if (state.deliveryMode === 'pvz' && state.selectedPvz) {
-                    // Если нет адреса — создаём из данных ПВЗ
                     if (!addressId) {
                         try {
                             const newAddr = await api.users.addAddress({
@@ -843,7 +907,6 @@ export async function renderCheckout(groupId) {
                 showToast('Заказ оформлен!', 'success');
                 haptic('success');
                 
-                // Открываем страницу оплаты ЮKassa
                 if (order.payment_url) {
                     window.open(order.payment_url, '_blank');
                 }
