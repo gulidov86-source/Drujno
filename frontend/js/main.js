@@ -11,7 +11,7 @@
 
 import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=5';
 import { api, authorize, getCachedUser } from './api.js?v=5';
-import { router, hideLoading } from './app.js?v=5';
+import { router, hideLoading, withErrorBoundary } from './app.js?v=5';
 import {
     renderHome, renderCatalog, renderProduct, renderGroup,
     renderCheckout, renderOrders, renderOrder, renderProfile,
