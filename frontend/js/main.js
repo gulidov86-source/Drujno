@@ -9,9 +9,9 @@
  *   3. Быстрый старт — не ждём категории для показа интерфейса
  */
 
-import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=4';
-import { api, authorize, getCachedUser } from './api.js?v=4';
-import { router, hideLoading } from './app.js?v=4';
+import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=5';
+import { api, authorize, getCachedUser } from './api.js?v=5';
+import { router, hideLoading } from './app.js?v=5';
 import {
     renderHome, renderCatalog, renderProduct, renderGroup,
     renderCheckout, renderOrders, renderOrder, renderProfile,
@@ -21,7 +21,7 @@ import {
     renderNotifications, renderFAQ,
     renderPrivacy, renderTerms,
     loadNotifBadge, setAppState
-} from './pages.js?v=4';
+} from './pages.js?v=5';
 
 const appState = { user: null, categories: [] };
 

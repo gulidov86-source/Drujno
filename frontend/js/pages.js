@@ -12,14 +12,14 @@
  *   6. Профиль: берёт юзера из appState (не из API повторно)
  */
 
-import { api, getCachedUser } from './api.js?v=4';
-import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=4';
+import { api, getCachedUser } from './api.js?v=5';
+import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=5';
 import {
     router, formatPrice, calcDiscount, formatDate, getTimeLeft,
     pluralize, showToast, showSheet, escapeHtml, debounce,
     setActiveNav, levelEmoji, levelName, orderStatusInfo, groupStatusInfo,
     productCardSkeleton, hotGroupCardSkeleton
-} from './app.js?v=4';
+} from './app.js?v=5';
 
 let appState = { user: null, categories: [] };
 export function setAppState(s) { appState = s; }
