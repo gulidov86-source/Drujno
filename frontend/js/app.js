@@ -10,7 +10,7 @@
  *   - Helpers: всякие мелкие инструменты (тосты, модалки, и т.д.)
  */
 
-import { haptic } from './telegram.js?v=4';
+import { haptic } from './telegram.js?v=5';
 
 // ============================================================
 // РОУТЕР (навигация между страницами)
@@ -598,7 +598,7 @@ export {
     hideLoading,
     productCardSkeleton,
     hotGroupCardSkeleton,
-	withErrorBoundary 
+	withErrorBoundary, 
     escapeHtml,
     debounce,
     setActiveNav,
