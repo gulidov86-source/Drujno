@@ -25,6 +25,40 @@ let appState = { user: null, categories: [] };
 export function setAppState(s) { appState = s; }
 
 // ============================================================
+// ERROR BOUNDARY — единая обёртка ошибок с кнопкой «Повторить»
+// ============================================================
+// Аналогия: как табличка «Извините, касса закрыта. 
+// Нажмите кнопку, чтобы вызвать кассира» — вместо просто
+// закрытого окошка без объяснений.
+
+/**
+ * Показывает состояние ошибки с кнопкой «Повторить».
+ * 
+ * @param {HTMLElement|string} container — DOM-элемент или его id
+ * @param {Function} retryFn — функция для повтора (напр. () => renderProduct(42))
+ * @param {string} [message] — текст ошибки (по умолчанию общий)
+ * 
+ * Пример: renderErrorState('ord-list', () => renderOrders())
+ * Пример: renderErrorState(app, () => renderProduct(id), 'Товар не загрузился')
+ */
+function renderErrorState(container, retryFn, message) {
+    const el = typeof container === 'string' ? document.getElementById(container) : container;
+    if (!el) return;
+    const msg = message || 'Не удалось загрузить данные';
+    el.innerHTML = `
+        <div class="error-boundary">
+            <div class="error-boundary__icon">😔</div>
+            <div class="error-boundary__title">${escapeHtml(msg)}</div>
+            <div class="error-boundary__text">Проверьте подключение к интернету и попробуйте снова</div>
+            <button class="btn btn-primary error-boundary__retry" id="eb-retry-btn">🔄 Повторить</button>
+        </div>`;
+    el.querySelector('#eb-retry-btn')?.addEventListener('click', () => {
+        haptic('light');
+        if (retryFn) retryFn();
+    });
+}
+
+// ============================================================
 // ОБЩИЕ КОМПОНЕНТЫ
 // ============================================================
 
@@ -223,7 +257,7 @@ async function loadCat(append=false) {
         if(append) el.insertAdjacentHTML('beforeend', html); else el.innerHTML = html;
         const m = document.getElementById('c-more');
         if(m && r.pages) m.classList.toggle('hidden', catS.page >= r.pages);
-    } catch(e) { console.error(e); if(!append) el.innerHTML = '<div style="grid-column:1/-1"><div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div></div>'; }
+    } catch(e) { console.error(e); if(!append) { el.innerHTML = '<div style="grid-column:1/-1"></div>'; renderErrorState(el.firstChild, () => loadCat(), 'Не удалось загрузить товары'); } }
 }
 
 
@@ -322,7 +356,7 @@ export async function renderProduct(id) {
             }
         } catch(e) { console.error('Groups for product:', e); }
 
-    } catch(e) { console.error(e); showToast('Ошибка загрузки','error'); }
+    } catch(e) { console.error(e); renderErrorState(app, () => renderProduct(id), 'Не удалось загрузить товар'); }
 }
 
 
@@ -423,7 +457,7 @@ export async function renderGroup(id) {
 
         document.getElementById('checkout-btn')?.addEventListener('click', () => { haptic('medium'); router.navigate(`checkout/${id}`); });
 
-    } catch(e) { console.error(e); showToast('Ошибка загрузки','error'); }
+    } catch(e) { console.error(e); renderErrorState(app, () => renderGroup(id), 'Не удалось загрузить сбор'); }
 }
 
 
@@ -927,7 +961,7 @@ export async function renderCheckout(groupId) {
 
     } catch (e) {
         console.error('Ошибка checkout:', e);
-        app.innerHTML = `<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div><div class="empty-state__text">${escapeHtml(e.message || '')}</div></div>`;
+        renderErrorState(app, () => renderCheckout(groupId), 'Не удалось загрузить оформление');
     }
 }
 
@@ -967,7 +1001,7 @@ export async function renderOrders() {
                 </div>
             </a>`;
         }).join('');
-    } catch(e) { console.error(e); document.getElementById('ord-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>'; }
+    } catch(e) { console.error(e); renderErrorState('ord-list', () => renderOrders(), 'Не удалось загрузить заказы'); }
 }
 
 
@@ -1043,7 +1077,7 @@ export async function renderOrder(id) {
             haptic('light');
             showReturnForm(id);
         });
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+    } catch(e) { console.error(e); renderErrorState(app, () => renderOrder(id), 'Не удалось загрузить заказ'); }
 }
 
 
@@ -1148,7 +1182,7 @@ async function loadMyGroupsData() {
         renderGroupsList('active');
     } catch(e) {
         console.error(e);
-        document.getElementById('g-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div><div class="empty-state__text">Проверьте подключение к интернету</div></div>';
+        renderErrorState('g-list', () => loadMyGroupsData(), 'Не удалось загрузить сборы');
     }
 }
 
@@ -1213,7 +1247,7 @@ async function loadAddrs() {
             if(!await showConfirm('Удалить адрес?'))return;
             try { await api.users.deleteAddress(b.dataset.del); showToast('Удалён','success'); loadAddrs(); } catch(e) { showToast('Ошибка','error'); }
         }));
-    } catch(e) { console.error(e); showToast('Ошибка','error'); }
+    } catch(e) { console.error(e); renderErrorState(el, () => loadAddrs(), 'Не удалось загрузить адреса'); }
 }
 
 function showAddrForm(existing=null) {
@@ -1346,7 +1380,7 @@ export async function renderReturns() {
         }).join('');
     } catch (e) {
         console.error(e);
-        document.getElementById('ret-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+        renderErrorState('ret-list', () => renderReturns(), 'Не удалось загрузить возвраты');
     }
 }
 
@@ -1429,7 +1463,7 @@ export async function renderReturn(id) {
                 router.navigate('returns');
             } catch (e) { showToast(e.message || 'Ошибка', 'error'); }
         });
-    } catch (e) { console.error(e); showToast('Ошибка', 'error'); }
+    } catch (e) { console.error(e); renderErrorState(app, () => renderReturn(id), 'Не удалось загрузить возврат'); }
 }
 
 
@@ -1543,7 +1577,7 @@ export async function renderSupport() {
         }).join('');
     } catch (e) {
         console.error(e);
-        document.getElementById('sup-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+        renderErrorState('sup-list', () => renderSupport(), 'Не удалось загрузить обращения');
     }
 }
 
@@ -1697,7 +1731,7 @@ export async function renderSupportTicket(id) {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
         });
 
-    } catch (e) { console.error(e); showToast('Ошибка', 'error'); }
+    } catch (e) { console.error(e); renderErrorState(app, () => renderSupportTicket(id), 'Не удалось загрузить обращение'); }
 }
 
 
@@ -1788,7 +1822,7 @@ export async function renderNotifications() {
         });
     } catch (e) {
         console.error(e);
-        document.getElementById('notif-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+        renderErrorState('notif-list', () => renderNotifications(), 'Не удалось загрузить уведомления');
     }
 }
 
@@ -1859,7 +1893,7 @@ export async function renderFAQ() {
         });
     } catch (e) {
         console.error(e);
-        document.getElementById('faq-list').innerHTML = '<div class="empty-state"><div class="empty-state__icon">⚠️</div><div class="empty-state__title">Ошибка загрузки</div></div>';
+        renderErrorState('faq-list', () => renderFAQ(), 'Не удалось загрузить FAQ');
     }
 }
 

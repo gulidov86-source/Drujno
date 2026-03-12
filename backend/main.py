@@ -36,6 +36,39 @@ from slowapi.errors import RateLimitExceeded
 from rate_limiter import limiter, rate_limit_exceeded_handler
 
 
+# ============================================================
+# SENTRY — мониторинг ошибок
+# ============================================================
+# 
+# Аналогия: Sentry — это чёрный ящик самолёта.
+# Когда на проде что-то падает — Sentry записывает:
+# кто, где, когда, что случилось, stack trace.
+# Ты получаешь уведомление и видишь ошибку с контекстом,
+# а не просто «что-то сломалось».
+
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.APP_ENV,
+            # traces_sample_rate=0.1 — записываем 10% запросов для performance
+            traces_sample_rate=0.1 if not is_development() else 0.0,
+            # Не отправляем в dev
+            send_default_pii=False,
+            integrations=[
+                FastApiIntegration(transaction_style="endpoint"),
+                StarletteIntegration(transaction_style="endpoint"),
+            ],
+        )
+        print("✅ Sentry подключён")
+    except ImportError:
+        print("⚠️  sentry-sdk не установлен, мониторинг ошибок отключён")
+
+
 
 # ============================================================
 # СОБЫТИЯ ЖИЗНЕННОГО ЦИКЛА
@@ -194,9 +227,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     
     Ловит все необработанные ошибки и возвращает красивый JSON.
     В production скрывает детали ошибки.
+    Sentry автоматически перехватывает ошибки через интеграцию,
+    но мы дополнительно логируем для надёжности.
     """
+    from logger import get_logger
+    logger = get_logger("main")
+    logger.error("Необработанная ошибка", 
+                 path=request.url.path, 
+                 method=request.method,
+                 error=str(exc),
+                 error_type=type(exc).__name__,
+                 exc_info=True)
+    
     if is_development():
-        # В разработке показываем детали
         return JSONResponse(
             status_code=500,
             content={
@@ -207,7 +250,6 @@ async def global_exception_handler(request: Request, exc: Exception):
             }
         )
     else:
-        # В production скрываем детали
         return JSONResponse(
             status_code=500,
             content={

@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
+    # ==================== МОНИТОРИНГ ====================
+    # Sentry DSN — для отлова ошибок на проде
+    # Получить: https://sentry.io → Create Project → Python → DSN
+    # Если пусто — Sentry не подключается
+    SENTRY_DSN: str = ""
+    
     # ==================== БИЗНЕС-ЛОГИКА ====================
     # Дефолтный дедлайн сбора в днях
     DEFAULT_GROUP_DEADLINE_DAYS: int = 7
