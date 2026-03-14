@@ -32,6 +32,8 @@
     result = await async_query("users", lambda q: q.select("*").eq("id", 1))
 """
 
+import sys
+sys.path.append("..")
 import asyncio
 from typing import Callable, Any, Optional
 from database.connection import get_db
