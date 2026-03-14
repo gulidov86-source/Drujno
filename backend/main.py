@@ -213,6 +213,20 @@ async def add_process_time_header(request: Request, call_next):
     response = await call_next(request)
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(round(process_time * 1000, 2)) + "ms"
+    # === КЕШИРОВАНИЕ API-ответов ===
+    # GET-запросы к API — кешируем на 30 сек (stale-while-revalidate даёт ещё 60 сек)
+    # Это значит: браузер отдаст закешированный ответ мгновенно,
+    # а в фоне проверит — не обновилось ли.
+    # Аналогия: официант приносит вчерашнее меню, но идёт уточнять на кухню.
+    path = request.url.path
+    if request.method == "GET" and path.startswith("/api/"):
+        # Не кешируем личные данные и платежи
+        no_cache_paths = ["/api/users/me", "/api/orders", "/api/payments", 
+                          "/api/notifications", "/api/support"]
+        if not any(path.startswith(p) for p in no_cache_paths):
+            response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=60"
+        else:
+            response.headers["Cache-Control"] = "private, no-store"
     return response
 
 
@@ -345,8 +359,24 @@ app.include_router(analytics.router)
 # ============================================================
 # ЗАПУСК
 # ============================================================
-app.mount("/css", StaticFiles(directory="../frontend/css"), name="css")
-app.mount("/js", StaticFiles(directory="../frontend/js"), name="js")
+# Статика с кеш-заголовками.
+# ?v=6 в URL обеспечивает cache-busting при обновлении.
+# max-age=86400 (1 день) — браузер не будет перекачивать файлы.
+# Аналогия: как дата на молоке — «свежее до завтра, не надо
+# каждый час нюхать».
+from starlette.staticfiles import StaticFiles as _StaticFiles
+from starlette.responses import Response
+
+class CachedStaticFiles(_StaticFiles):
+    """StaticFiles с заголовком Cache-Control."""
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        # Кешируем на 1 день (cache-busting через ?v=N)
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+
+app.mount("/css", CachedStaticFiles(directory="../frontend/css"), name="css")
+app.mount("/js", CachedStaticFiles(directory="../frontend/js"), name="js")
 if __name__ == "__main__":
     """
     Запуск приложения напрямую через Python.

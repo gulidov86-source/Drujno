@@ -374,7 +374,9 @@ async def create_order(
             "group_id": body.group_id, "user_id": user_id,
             "joined_at": datetime.now(timezone.utc).isoformat()
         }).execute()
-        db.table("groups").update({"current_count": current_count + 1}).eq("id", body.group_id).execute()
+        # НЕ обновляем current_count вручную!
+        # Триггер БД на group_members автоматически делает +1.
+        # Если обновлять И здесь, И триггером — будет двойной счёт.
 
     delivery_cost = calculate_delivery_cost(body.delivery_type, address_data.get("city"))
     total_amount = final_price + delivery_cost
@@ -423,6 +425,78 @@ async def create_order(
         message="Перейдите по ссылке для оплаты"
     )
 
+
+# ============================================================
+# ПОВТОРНАЯ ОПЛАТА
+# ============================================================
+# Аналогия: ты подошёл к кассе самообслуживания, отсканировал товары,
+# но ушёл не оплатив. Эндпоинт — это кнопка «Вернуться к кассе»:
+# создаёт новую платёжную ссылку для того же заказа.
+
+@router.post(
+    "/{order_id}/retry-payment",
+    response_model=CreateOrderResponse,
+    summary="Повторить оплату",
+    description="Создать новую ссылку на оплату для заказа в статусе pending."
+)
+async def retry_payment(
+    order_id: int,
+    user_id: int = Depends(get_current_user)
+):
+    db = get_db()
+    payment_service = get_payment_service()
+
+    # Получаем заказ
+    result = (
+        db.table("orders")
+        .select("*, groups(product_id, products(id, name))")
+        .eq("id", order_id).eq("user_id", user_id).limit(1).execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
+
+    order_data = result.data[0]
+
+    # Только pending можно оплатить повторно
+    if order_data["status"] != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Повторная оплата доступна только для заказов в ожидании"
+        )
+
+    total_amount = Decimal(str(order_data.get("total_amount", 0)))
+    final_price = Decimal(str(order_data.get("final_price", 0)))
+    delivery_cost = Decimal(str(order_data.get("delivery_cost", 0)))
+
+    product_data = order_data.get("groups", {}).get("products", {})
+    product_name = product_data.get("name", "Товар")
+    description = f"Групповая покупка: {product_name}"
+    return_url = f"{settings.TELEGRAM_WEBAPP_URL}?order={order_id}"
+
+    # Телефон для чека (54-ФЗ)
+    user_data = db.table("users").select("phone").eq("id", user_id).limit(1).execute()
+    user_phone = user_data.data[0].get("phone") if user_data.data else None
+
+    receipt_items = [{"name": product_name[:128], "quantity": 1, "price": str(final_price)}]
+    if delivery_cost > 0:
+        receipt_items.append({"name": "Доставка СДЭК", "quantity": 1, "price": str(delivery_cost)})
+
+    payment_result = await payment_service.create_payment(
+        amount=total_amount, order_id=order_id, description=description,
+        return_url=return_url, user_phone=user_phone, items=receipt_items
+    )
+
+    if not payment_result.success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=payment_result.error or "Ошибка создания платежа"
+        )
+
+    return CreateOrderResponse(
+        success=True, order_id=order_id,
+        payment_url=payment_result.confirmation_url,
+        message="Перейдите по ссылке для оплаты"
+    )
 
 # ============================================================
 # ОТМЕНА ЗАКАЗА (Спринт 2 — антифрод-проверка)

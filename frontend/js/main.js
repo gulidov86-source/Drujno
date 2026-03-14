@@ -9,19 +9,19 @@
  *   3. Быстрый старт — не ждём категории для показа интерфейса
  */
 
-import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=5';
-import { api, authorize, getCachedUser } from './api.js?v=5';
-import { router, hideLoading, withErrorBoundary } from './app.js?v=5';
+import { initTelegram, getStartParam, parseStartParam, haptic } from './telegram.js?v=6';
+import { api, authorize, getCachedUser } from './api.js?v=6';
+import { router, hideLoading, withErrorBoundary } from './app.js?v=6';
 import {
     renderHome, renderCatalog, renderProduct, renderGroup,
     renderCheckout, renderOrders, renderOrder, renderProfile,
-    renderAddresses, renderMyGroups,
+    renderAddresses, renderGroupsBrowse, renderMyGroups,
     renderReturns, renderReturn,
     renderSupport, renderSupportCreate, renderSupportTicket,
     renderNotifications, renderFAQ,
     renderPrivacy, renderTerms,
     loadNotifBadge, setAppState
-} from './pages.js?v=5';
+} from './pages.js?v=6';
 
 const appState = { user: null, categories: [] };
 
@@ -62,7 +62,8 @@ async function init() {
         .on('order/:id', (p) => withErrorBoundary(renderOrder, p.id))
         .on('profile', () => withErrorBoundary(renderProfile))
         .on('addresses', () => withErrorBoundary(renderAddresses))
-        .on('groups', () => withErrorBoundary(renderMyGroups))
+        .on('groups', () => withErrorBoundary(renderGroupsBrowse))
+		.on('my-groups', () => withErrorBoundary(renderMyGroups))
         .on('returns', () => withErrorBoundary(renderReturns))
         .on('return/:id', (p) => withErrorBoundary(renderReturn, p.id))
         .on('support', () => withErrorBoundary(renderSupport))

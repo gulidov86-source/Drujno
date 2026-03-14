@@ -1,4 +1,4 @@
-/**
+	/**
  * ============================================================
  * Модуль: api.js (v2 — ИСПРАВЛЕН)
  * ============================================================
@@ -10,7 +10,7 @@
  *   4. Один retry при 401 вместо бесконечной рекурсии
  */
 
-import { getInitData } from './telegram.js?v=4';
+import { getInitData } from './telegram.js?v=6';
 
 const BASE_URL = window.APP_CONFIG?.apiUrl || '';
 
@@ -124,6 +124,43 @@ function unwrap(r) {
     return r;
 }
 
+// ─── Простой кеш с TTL (время жизни) ───
+// Аналогия: как «записная книжка» у продавца.
+// Если клиент спрашивал то же самое недавно — ответ из записки.
+// Через 60 секунд записка «протухает» и продавец идёт проверять.
+//
+// Пример:
+//   cachedGet('/api/products?sort=popular', 30)
+//   → Первый вызов: идёт на сервер, сохраняет ответ на 30 сек
+//   → Второй вызов (через 5 сек): мгновенно из памяти
+//   → Третий вызов (через 35 сек): снова на сервер (протухло)
+
+const _cache = new Map();
+
+function cachedGet(path, ttlSeconds = 60) {
+    const now = Date.now();
+    const cached = _cache.get(path);
+    
+    // Если есть свежий кеш — возвращаем мгновенно
+    if (cached && (now - cached.time) < ttlSeconds * 1000) {
+        return Promise.resolve(cached.data);
+    }
+    
+    // Иначе — идём на сервер и сохраняем
+    return request('GET', path).then(data => {
+        _cache.set(path, { data, time: now });
+        return data;
+    });
+}
+
+// Сброс кеша (после мутаций — создание заказа, вступление в сбор)
+function invalidateCache(prefix) {
+    for (const key of _cache.keys()) {
+        if (key.startsWith(prefix)) _cache.delete(key);
+    }
+}
+
+
 const api = {
     users: {
         auth: () => authorize(),
@@ -137,18 +174,25 @@ const api = {
         deleteAddress: (id) => request('DELETE', `/api/users/me/addresses/${id}`),
     },
     products: {
-        list: (p = {}) => request('GET', `/api/products${buildQuery(p)}`),
-        get: (id) => request('GET', `/api/products/${id}`),
-        categories: () => request('GET', '/api/products/categories/'),
-        popular: (n = 10) => request('GET', `/api/products/popular/?limit=${n}`),
+        // 120 сек — каталог меняется редко
+        list: (p = {}) => cachedGet(`/api/products${buildQuery(p)}`, 120),
+        // 300 сек — карточка товара почти статична
+        get: (id) => cachedGet(`/api/products/${id}`, 300),
+        // 600 сек — категории меняются очень редко
+        categories: () => cachedGet('/api/products/categories/', 600),
+        // 120 сек
+        popular: (n = 10) => cachedGet(`/api/products/popular/?limit=${n}`, 120),
     },
     groups: {
-        list: (p = {}) => request('GET', `/api/groups${buildQuery(p)}`),
-        hot: (n = 5) => request('GET', `/api/groups/hot?limit=${n}`),
-        get: (id) => request('GET', `/api/groups/${id}`),
-        create: (d) => request('POST', '/api/groups', d),
-        join: (id, ref = null) => request('POST', `/api/groups/${id}/join`, ref ? { invited_by_user_id: ref } : {}),
-        leave: (id) => request('POST', `/api/groups/${id}/leave`),
+        // 30 сек — сборы обновляются чаще (участники вступают)
+        list: (p = {}) => cachedGet(`/api/groups${buildQuery(p)}`, 30),
+        hot: (n = 5) => cachedGet(`/api/groups/hot?limit=${n}`, 30),
+        // 15 сек — детали сбора меняются при вступлении
+        get: (id) => cachedGet(`/api/groups/${id}`, 15),
+        // Мутации — без кеша!
+        create: (d) => request('POST', '/api/groups', d).then(r => { invalidateCache('/api/groups'); return r; }),
+        join: (id, ref = null) => request('POST', `/api/groups/${id}/join`, ref ? { invited_by_user_id: ref } : {}).then(r => { invalidateCache('/api/groups'); return r; }),
+        leave: (id) => request('POST', `/api/groups/${id}/leave`).then(r => { invalidateCache('/api/groups'); return r; }),
         share: (id) => request('GET', `/api/groups/${id}/share`),
         my: () => request('GET', '/api/groups/my/all'),
     },
@@ -157,6 +201,7 @@ const api = {
         get: (id) => request('GET', `/api/orders/${id}`),
         create: (d) => request('POST', '/api/orders', d),
         cancel: (id) => request('POST', `/api/orders/${id}/cancel`),
+        retryPayment: (id) => request('POST', `/api/orders/${id}/retry-payment`),
     },
     payments: {
         status: (oid) => request('GET', `/api/payments/order/${oid}/status`),

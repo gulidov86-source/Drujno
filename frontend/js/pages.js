@@ -12,14 +12,14 @@
  *   6. Профиль: берёт юзера из appState (не из API повторно)
  */
 
-import { api, getCachedUser } from './api.js?v=5';
-import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=5';
+import { api, getCachedUser } from './api.js?v=6';
+import { haptic, showBackButton, hideBackButton, hideMainButton, shareUrl, showConfirm } from './telegram.js?v=6';
 import {
     router, formatPrice, calcDiscount, formatDate, getTimeLeft,
     pluralize, showToast, showSheet, escapeHtml, debounce,
     setActiveNav, levelEmoji, levelName, orderStatusInfo, groupStatusInfo,
     productCardSkeleton, hotGroupCardSkeleton
-} from './app.js?v=5';
+} from './app.js?v=6';
 
 let appState = { user: null, categories: [] };
 export function setAppState(s) { appState = s; }
@@ -242,7 +242,7 @@ async function loadCat(append=false) {
     const el = document.getElementById('c-grid'); if(!el) return;
     if(!append) el.innerHTML = productCardSkeleton().repeat(6);
     try {
-        const p = { page:catS.page, per_page:12, sort:catS.sort };
+        const p = { page:catS.page, per_page:12, sort_by:catS.sort };
         if(catS.search) p.search = catS.search;
         if(catS.catId) p.category_id = catS.catId;
         const r = await api.products.list(p);
@@ -330,8 +330,7 @@ export async function renderProduct(id) {
 
         // Загружаем активные сборы
         try {
-            const gl = await api.groups.list({ product_id: id, status: 'active' });
-            const groups = gl.items || gl;
+            const groups = p.active_groups || [];
             const c = document.getElementById('prod-groups');
             const joinArea = document.getElementById('join-existing-area');
 
@@ -1063,10 +1062,31 @@ export async function renderOrder(id) {
                 <div class="order-summary__row"><span>Доставка</span><span>${parseFloat(o.delivery_cost)>0?formatPrice(o.delivery_cost):'Бесплатно'}</span></div>
                 <div class="order-summary__total"><span>Итого</span><span>${formatPrice(o.total_amount)}</span></div>
             </div>
-            ${o.can_cancel?`<div style="padding:16px var(--page-padding)"><button class="btn btn-outline btn-block" id="cancel-btn" style="color:var(--danger);border-color:var(--danger)">Отменить заказ</button></div>`:''}
+            ${o.status === 'pending' ? `<div style="padding:16px var(--page-padding) 8px"><button class="btn btn-success btn-block btn-lg" id="retry-pay-btn">💳 Оплатить</button></div>` : ''}
+            ${o.can_cancel?`<div style="padding:8px var(--page-padding) 16px"><button class="btn btn-outline btn-block" id="cancel-btn" style="color:var(--danger);border-color:var(--danger)">Отменить заказ</button></div>`:''}
             ${o.status === 'delivered' ? `<div style="padding:0 var(--page-padding) 16px"><button class="btn btn-outline btn-block" id="return-btn">🔄 Оформить возврат</button></div>` : ''}
         </div>`;
 
+
+
+		// Кнопка повторной оплаты (для pending заказов)
+        document.getElementById('retry-pay-btn')?.addEventListener('click', async () => {
+            haptic('medium');
+            const btn = document.getElementById('retry-pay-btn');
+            btn.disabled = true; btn.textContent = '⏳ Создаём ссылку...';
+            try {
+                const result = await api.orders.retryPayment(id);
+                if (result.payment_url) {
+                    window.open(result.payment_url, '_blank');
+                    showToast('Откройте ссылку для оплаты', 'success');
+                }
+            } catch (e) {
+                showToast(e.message || 'Ошибка создания платежа', 'error');
+                haptic('error');
+            }
+            btn.disabled = false; btn.textContent = '💳 Оплатить';
+        });
+		
         document.getElementById('cancel-btn')?.addEventListener('click', async () => {
             if(!await showConfirm('Отменить заказ?')) return;
             try { await api.orders.cancel(id); showToast('Отменён','success'); renderOrder(id); } catch(e) { showToast(e.message||'Ошибка','error'); }
@@ -1114,7 +1134,7 @@ export async function renderProfile() {
         </div>
         <div class="profile-menu">
             <a href="#orders" class="profile-menu__item"><span class="profile-menu__icon">📦</span><span class="profile-menu__text">Мои заказы</span><span class="profile-menu__arrow">›</span></a>
-            <a href="#groups" class="profile-menu__item"><span class="profile-menu__icon">👥</span><span class="profile-menu__text">Мои сборы</span><span class="profile-menu__arrow">›</span></a>
+            <a href="#my-groups" class="profile-menu__item"><span class="profile-menu__icon">👥</span><span class="profile-menu__text">Мои сборы</span><span class="profile-menu__arrow">›</span></a>
             <a href="#returns" class="profile-menu__item"><span class="profile-menu__icon">🔄</span><span class="profile-menu__text">Мои возвраты</span><span class="profile-menu__arrow">›</span></a>
             <a href="#addresses" class="profile-menu__item"><span class="profile-menu__icon">📍</span><span class="profile-menu__text">Адреса доставки</span><span class="profile-menu__arrow">›</span></a>
             <div class="profile-menu__divider"></div>
@@ -1151,13 +1171,91 @@ export async function renderProfile() {
 
 
 // ============================================================
+// ОБЗОР ВСЕХ СБОРОВ — витрина
+// ============================================================
+// Аналогия: доска объявлений в подъезде —
+// «Собираемся на оптовую закупку! 5/10 участников, осталось 3 дня»
+// Любой сосед видит и может присоединиться.
+
+export async function renderGroupsBrowse() {
+    setActiveNav('groups'); hideBackButton(); hideMainButton();
+    trackEvent('page_view', { page: 'groups_browse' });
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <div class="page-enter">
+            <div class="topbar">
+                <div class="topbar__title">Сборы</div>
+                <a href="#my-groups" style="font-size:0.85rem;color:var(--accent);text-decoration:none;font-weight:600">Мои →</a>
+            </div>
+            <div class="tabs" id="gb-tabs">
+                <button class="tab active" data-sort="popular">Популярные</button>
+                <button class="tab" data-sort="ending_soon">Скоро закроются</button>
+                <button class="tab" data-sort="new">Новые</button>
+            </div>
+            <div id="gb-list">${Array(4).fill('<div class="order-card"><div class="skeleton" style="height:90px"></div></div>').join('')}</div>
+        </div>`;
+
+    let currentSort = 'popular';
+    document.getElementById('gb-tabs')?.addEventListener('click', e => {
+        const t = e.target.closest('.tab'); if (!t) return;
+        haptic('light');
+        document.querySelectorAll('#gb-tabs .tab').forEach(b => b.classList.remove('active'));
+        t.classList.add('active');
+        currentSort = t.dataset.sort;
+        loadBrowseGroups(currentSort);
+    });
+    loadBrowseGroups(currentSort);
+}
+
+async function loadBrowseGroups(sortBy = 'popular') {
+    const el = document.getElementById('gb-list'); if (!el) return;
+    el.innerHTML = Array(4).fill('<div class="order-card"><div class="skeleton" style="height:90px"></div></div>').join('');
+    try {
+        const r = await api.groups.list({ status: 'active', sort_by: sortBy, per_page: 30 });
+        const groups = r.items || r;
+        if (!groups?.length) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="empty-state__icon">👥</div>
+                <div class="empty-state__title">Пока нет активных сборов</div>
+                <div class="empty-state__text">Создайте первый из каталога!</div>
+                <button class="btn btn-primary" onclick="location.hash='catalog'">Каталог →</button>
+            </div>`;
+            return;
+        }
+        el.innerHTML = groups.map(g => {
+            const tl = getTimeLeft(g.deadline);
+            const st = groupStatusInfo(g.status);
+            const prog = g.progress_percent || 0;
+            const disc = calcDiscount(g.base_price, g.current_price);
+            return `<a href="#group/${g.id}" class="order-card" style="display:block;text-decoration:none;color:var(--text)">
+                <div class="order-card__header">
+                    <span class="order-card__name">${escapeHtml(g.product_name || 'Сбор')}</span>
+                    <span class="badge badge-${st.color}">${st.emoji} ${st.text}</span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin:8px 0">
+                    <span style="font-size:0.85rem">👥 ${pluralize(g.current_count, 'участник', 'участника', 'участников')} из ${g.min_participants}</span>
+                    <span class="price" style="font-size:1rem">${formatPrice(g.current_price)} ${disc > 0 ? `<span class="price-discount">-${disc}%</span>` : ''}</span>
+                </div>
+                <div class="progress-bar" style="height:6px"><div class="progress-bar__fill" style="width:${Math.min(prog, 100)}%"></div></div>
+                ${g.status === 'active' && !tl.expired ? `<div style="font-size:0.8rem;color:var(--text-hint);margin-top:6px">⏳ ${tl.text}${g.creator_name ? ' · 👤 ' + escapeHtml(g.creator_name) : ''}</div>` : ''}
+            </a>`;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        renderErrorState(el, () => loadBrowseGroups(sortBy), 'Не удалось загрузить сборы');
+    }
+}
+
+
+
+// ============================================================
 // МОИ СБОРЫ (MyGroupsResponse: {active, completed, organized})
 // ============================================================
 
 export async function renderMyGroups() {
     setActiveNav('groups'); hideBackButton(); hideMainButton();
     const app = document.getElementById('app');
-    app.innerHTML = `<div class="page-enter"><div class="topbar"><div class="topbar__title">Мои сборы</div></div>
+    app.innerHTML = `<div class="page-enter"><div class="topbar"><div class="topbar__title">Мои сборы</div><a href="#groups" style="font-size:0.85rem;color:var(--accent);text-decoration:none;font-weight:600">← Все сборы</a></div>
         <div class="tabs" id="g-tabs"><button class="tab active" data-tab="active">Активные</button><button class="tab" data-tab="completed">Завершённые</button><button class="tab" data-tab="organized">Созданные</button></div>
         <div id="g-list">${Array(3).fill('<div class="order-card"><div class="skeleton" style="height:80px"></div></div>').join('')}</div></div>`;
 
