@@ -47,7 +47,7 @@ from utils.auth import (
     TokenResponse
 )
 from rate_limiter import limiter, auth_limit
-
+from utils.async_db import async_execute, async_insert, async_update
 
 # ============================================================
 # РОУТЕР
@@ -236,13 +236,12 @@ async def auth_telegram(request: Request, body: AuthRequest):
     db = get_db()
     is_new = False
     
-    # 4. Ищем пользователя по telegram_id
-    result = (
+    # 4. Ищем пользователя по telegram_id (ASYNC — не блокируем event loop)
+    result = await async_execute(
         db.table("users")
         .select("*")
         .eq("telegram_id", tg_user.id)
         .limit(1)
-        .execute()
     )
     
     if result.data and len(result.data) > 0:
@@ -257,7 +256,9 @@ async def auth_telegram(request: Request, body: AuthRequest):
             "updated_at": datetime.utcnow().isoformat()
         }
         
-        db.table("users").update(update_data).eq("id", user_data["id"]).execute()
+        await async_execute(
+            db.table("users").update(update_data).eq("id", user_data["id"])
+        )
         user_data.update(update_data)
         
     else:
@@ -276,7 +277,7 @@ async def auth_telegram(request: Request, body: AuthRequest):
             "groups_organized": 0
         }
         
-        result = db.table("users").insert(new_user_data).execute()
+        result = await async_insert("users", new_user_data)
         
         if not result.data:
             raise HTTPException(
@@ -334,12 +335,11 @@ async def get_my_profile(user_id: int = Depends(get_current_user)):
     """
     db = get_db()
     
-    result = (
+    result = await async_execute(
         db.table("users")
         .select("*")
         .eq("id", user_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:

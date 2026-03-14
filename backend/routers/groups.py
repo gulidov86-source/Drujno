@@ -49,6 +49,9 @@ from services.price_calculator import (
 from utils.auth import get_current_user, get_current_user_optional
 from utils.telegram import parse_start_param
 from rate_limiter import limiter, create_limit
+# === ОПТИМИЗАЦИЯ ===
+from utils.async_db import async_execute
+from utils.server_cache import server_cache, CACHE_TTL_HOT_GROUPS
 
 
 # ============================================================
@@ -274,7 +277,7 @@ async def get_groups(
         query = query.order("current_count", desc=True)
     offset = (page - 1) * per_page
     query = query.range(offset, offset + per_page - 1)
-    result = query.execute()
+    esult = await async_execute(query)
     items = []
     for group_data in (result.data or []):
         product_data = group_data.get("products", {})
@@ -292,15 +295,21 @@ async def get_groups(
 
 @router.get("/hot", response_model=List[GroupListItem], summary="Горячие сборы")
 async def get_hot_groups(limit: int = Query(10, ge=1, le=50)):
+    # --- Серверный кеш (15 сек) ---
+    cache_key = f"groups:hot:{limit}"
+    cached = server_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     db = get_db()
-    result = (
+    result = await async_execute(
         db.table("groups")
         .select("*, products(id, name, image_url, base_price, price_tiers)")
         .eq("status", "active")
         .order("current_count", desc=True)
         .limit(limit * 2)
-        .execute()
     )
+    
     now = datetime.now(timezone.utc)
     hot_groups = []
     for group_data in (result.data or []):
@@ -315,6 +324,10 @@ async def get_hot_groups(limit: int = Query(10, ge=1, le=50)):
             hot_groups.append(build_group_list_item(group_data, product_data))
         if len(hot_groups) >= limit:
             break
+    
+    # --- Сохраняем в кеш ---
+    server_cache.set(cache_key, hot_groups, ttl=CACHE_TTL_HOT_GROUPS)
+    
     return hot_groups
 
 
@@ -328,7 +341,7 @@ async def get_group_detail(
     user_id: Optional[int] = Depends(get_current_user_optional)
 ):
     db = get_db()
-    result = (
+    result = await async_execute(
         db.table("groups")
         .select(
             "*, "
@@ -337,7 +350,6 @@ async def get_group_detail(
         )
         .eq("id", group_id)
         .limit(1)
-        .execute()
     )
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сбор не найден")
@@ -359,11 +371,15 @@ async def get_group_detail(
     can_join = group_data.get("status") == "active"
     if user_id:
         is_creator = group_data.get("creator_id") == user_id
-        membership = db.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).limit(1).execute()
+        membership = await async_execute(
+            db.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).limit(1)
+        )
         is_member = bool(membership.data)
         if is_member:
             can_join = False
-        invited = db.table("group_members").select("id", count="exact").eq("group_id", group_id).eq("invited_by_user_id", user_id).execute()
+        invited = await async_execute(
+            db.table("group_members").select("id", count="exact").eq("group_id", group_id).eq("invited_by_user_id", user_id)
+        )
         user_invited_count = invited.count or 0
 
     price_tier_objects = [PriceTier(min_quantity=t["min_quantity"], price=Decimal(str(t["price"]))) for t in price_tiers]
@@ -413,6 +429,7 @@ async def create_group(
     )
     if not result.success:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.message)
+    server_cache.invalidate_prefix("groups:")    
     return CreateGroupResponse(success=True, group_id=result.group_id, message=result.message)
 
 
@@ -437,7 +454,8 @@ async def join_group(
 
     if NOTIFICATIONS_ENABLED:
         background_tasks.add_task(notify_on_join, group_id=group_id, new_member_id=user_id, invited_by_id=invited_by)
-
+    # Инвалидируем кеш сборов (участник вступил — данные устарели)
+    server_cache.invalidate_prefix("groups:")
     return JoinGroupResponse(
         success=True, group_id=result.group_id, current_count=result.current_count,
         current_price=result.current_price, previous_price=result.previous_price,
@@ -564,7 +582,8 @@ async def leave_group(
             f"Вы покинули сбор. Цена для остальных участников "
             f"выросла с {int(old_price):,}₽ до {int(new_price):,}₽".replace(",", " ")
         )
-    
+    # Инвалидируем кеш сборов (участник вступил — данные устарели)
+    server_cache.invalidate_prefix("groups:")
     return result
 
 

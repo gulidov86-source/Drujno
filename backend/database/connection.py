@@ -141,11 +141,13 @@ async def check_connection() -> dict:
             print(f"Ошибка: {result['error']}")
     """
     try:
+        import asyncio
         db = get_db()
         
-        # Пробуем выполнить простой запрос
-        # Запрашиваем системную таблицу (всегда существует)
-        result = db.table("users").select("id").limit(1).execute()
+        # Пробуем выполнить простой запрос (ASYNC)
+        result = await asyncio.to_thread(
+            db.table("users").select("id").limit(1).execute
+        )
         
         return {
             "connected": True,

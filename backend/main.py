@@ -283,6 +283,11 @@ async def root():
 
 
 
+@app.get("/cache-stats", tags=["Система"])
+async def cache_stats():
+    """Статистика серверного кеша (для мониторинга)."""
+    from utils.server_cache import server_cache
+    return server_cache.stats()
 
 @app.get("/health", tags=["Система"])
 async def health_check():

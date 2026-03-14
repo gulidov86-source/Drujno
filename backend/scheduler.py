@@ -100,7 +100,25 @@ scheduler.add_job(
     replace_existing=True,
     max_instances=1,
 )
+# Очистка серверного кеша — каждые 2 минуты
+# Удаляет протухшие записи, чтобы не копилась память
+async def job_cleanup_cache():
+    try:
+        from utils.server_cache import server_cache
+        removed = server_cache.cleanup()
+        if removed > 0:
+            print(f"[Scheduler] 🗑 Очистка кеша: удалено {removed} протухших записей")
+    except Exception as e:
+        print(f"[Scheduler] ❌ Ошибка cleanup_cache: {e}")
 
+scheduler.add_job(
+    job_cleanup_cache,
+    trigger=IntervalTrigger(minutes=2),
+    id="cleanup_cache",
+    name="Очистка серверного кеша",
+    replace_existing=True,
+    max_instances=1,
+)
 
 # ============================================================
 # УПРАВЛЕНИЕ

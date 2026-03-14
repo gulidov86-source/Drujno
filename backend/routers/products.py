@@ -26,6 +26,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
+
 import sys
 sys.path.append("..")
 from database.connection import get_db
@@ -42,6 +43,9 @@ from services.price_calculator import (
 )
 from utils.auth import get_current_user_optional
 import time as _time
+# === ОПТИМИЗАЦИЯ ===
+from utils.async_db import async_execute, async_query
+from utils.server_cache import server_cache, CACHE_TTL_POPULAR, CACHE_TTL_PRODUCT_LIST
 
 # Серверный кеш категорий (TTL 5 минут)
 # Аналогия: табличка «Отделы магазина» на входе.
@@ -283,7 +287,7 @@ async def get_products(
     query = query.range(offset, offset + per_page - 1)
     
     # Выполняем запрос
-    result = query.execute()
+    result = await async_execute(query)
     
     total = result.count or 0
     pages = (total + per_page - 1) // per_page if per_page > 0 else 0
@@ -293,12 +297,11 @@ async def get_products(
     
     active_groups = {}
     if product_ids:
-        groups_result = (
+        groups_result = await async_execute(
             db.table("groups")
             .select("*")
             .in_("product_id", product_ids)
             .eq("status", "active")
-            .execute()
         )
         
         for group in (groups_result.data or []):
@@ -368,12 +371,11 @@ async def get_product_detail(
     db = get_db()
     
     # Получаем товар
-    result = (
+    result = await async_execute(
         db.table("products")
         .select("*")
         .eq("id", product_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
@@ -388,24 +390,22 @@ async def get_product_detail(
     # Получаем категорию
     category_name = None
     if product.get("category_id"):
-        cat_result = (
+        cat_result = await async_execute(
             db.table("categories")
             .select("name")
             .eq("id", product["category_id"])
             .limit(1)
-            .execute()
         )
         if cat_result.data:
             category_name = cat_result.data[0]["name"]
     
     # Получаем активные сборы
-    groups_result = (
+    groups_result = await async_execute(
         db.table("groups")
         .select("*")
         .eq("product_id", product_id)
         .eq("status", "active")
         .order("current_count", desc=True)
-        .execute()
     )
     
     active_groups = []
@@ -481,23 +481,21 @@ async def get_categories():
     # Один запрос — категории + количество товаров через LEFT JOIN
     # Supabase поддерживает агрегацию через RPC или считаем в Python
     # после одного батч-запроса
-    categories_result = (
+    categories_result = await async_execute(
         db.table("categories")
         .select("*")
         .eq("is_active", True)
         .order("sort_order")
-        .execute()
     )
     
     if not categories_result.data:
         return []
     
     # Получаем ВСЕ product_id + category_id одним запросом
-    products_result = (
+    products_result = await async_execute(
         db.table("products")
         .select("category_id")
         .eq("is_active", True)
-        .execute()
     )
     
     # Считаем в Python — O(N), без доп. запросов к БД
@@ -600,31 +598,34 @@ async def get_popular_products(
 ):
     """
     Получить популярные товары.
-    
-    Сортировка по количеству продаж.
+    ОПТИМИЗИРОВАНО: серверный кеш + async DB.
     """
+    # --- Серверный кеш ---
+    cache_key = f"products:popular:{limit}"
+    cached = server_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     db = get_db()
     
-    result = (
+    result = await async_execute(
         db.table("products")
         .select("*")
         .eq("is_active", True)
         .order("total_sold", desc=True)
         .limit(limit)
-        .execute()
     )
     
-    # Получаем активные сборы
+    # Получаем активные сборы (ASYNC)
     product_ids = [p["id"] for p in (result.data or [])]
     
     active_groups = {}
     if product_ids:
-        groups_result = (
+        groups_result = await async_execute(
             db.table("groups")
             .select("*")
             .in_("product_id", product_ids)
             .eq("status", "active")
-            .execute()
         )
         
         for group in (groups_result.data or []):
@@ -652,5 +653,8 @@ async def get_popular_products(
             active_group=active_group,
             total_sold=product.get("total_sold", 0)
         ))
+    
+    # --- Сохраняем в кеш ---
+    server_cache.set(cache_key, items, ttl=CACHE_TTL_POPULAR)
     
     return items
