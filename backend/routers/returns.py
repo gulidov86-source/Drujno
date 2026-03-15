@@ -37,6 +37,7 @@ sys.path.append("..")
 from utils.auth import get_current_user
 from database.connection import get_supabase_client
 from database.models import ReturnStatus, ReturnReason
+from utils.async_db import async_execute 
 
 
 # ============================================================
@@ -71,7 +72,6 @@ class CreateReturnRequest(BaseModel):
             }
         }
 
-
 # ============================================================
 # ЭНДПОИНТЫ
 # ============================================================
@@ -100,11 +100,13 @@ async def create_return(
     db = get_supabase_client()
     
     # 1. Проверяем что заказ существует и принадлежит пользователю
-    order_result = db.table("orders").select("*").eq(
-        "id", request.order_id
-    ).eq(
-        "user_id", user_id
-    ).execute()
+    order_result = await async_execute(
+        db.table("orders").select("*").eq(
+            "id", request.order_id
+        ).eq(
+            "user_id", user_id
+        )
+    )
     
     if not order_result.data:
         raise HTTPException(status_code=404, detail="Заказ не найден")
@@ -119,11 +121,13 @@ async def create_return(
         )
     
     # 3. Проверяем что нет активного возврата на этот заказ
-    existing = db.table("returns").select("id, status").eq(
-        "order_id", request.order_id
-    ).in_(
-        "status", ["pending", "approved", "awaiting_item"]
-    ).execute()
+    existing = await async_execute(
+        db.table("returns").select("id, status").eq(
+            "order_id", request.order_id
+        ).in_(
+            "status", ["pending", "approved", "awaiting_item"]
+        )
+    )
     
     if existing.data:
         raise HTTPException(
@@ -142,7 +146,9 @@ async def create_return(
         "refund_amount": float(order["total_amount"])  # По умолчанию — полная сумма
     }
     
-    result = db.table("returns").insert(return_data).execute()
+    result = await async_execute(
+        db.table("returns").insert(return_data)
+    )
     
     if not result.data:
         raise HTTPException(status_code=500, detail="Ошибка создания заявки")
@@ -150,9 +156,11 @@ async def create_return(
     return_record = result.data[0]
     
     # 5. Обновляем статус заказа
-    db.table("orders").update({
-        "status": "refunded"
-    }).eq("id", request.order_id).execute()
+    await async_execute(
+        db.table("orders").update({
+            "status": "refunded"
+        }).eq("id", request.order_id)
+    )
     
     # TODO: Отправить уведомление админу через notification_service
     
@@ -186,9 +194,9 @@ async def get_my_returns(
     db = get_supabase_client()
     
     # Получаем заказы пользователя
-    orders_result = db.table("orders").select("id").eq(
-        "user_id", user_id
-    ).execute()
+    orders_result = await async_execute(
+        db.table("orders").select("id").eq("user_id", user_id)
+    )
     
     if not orders_result.data:
         return {"success": True, "data": [], "count": 0}
@@ -202,15 +210,17 @@ async def get_my_returns(
         query = query.eq("status", status)
     
     query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-    result = query.execute()
+    result = await async_execute(query)
     
     # Обогащаем данными заказов
     returns_data = []
     for ret in (result.data or []):
         # Получаем информацию о заказе
-        order_info = db.table("orders").select(
-            "id, final_price, total_amount, status"
-        ).eq("id", ret["order_id"]).execute()
+        order_info = await async_execute(
+            db.table("orders").select(
+                "id, final_price, total_amount, status"
+            ).eq("id", ret["order_id"])
+        )
         
         order = order_info.data[0] if order_info.data else {}
         
@@ -245,7 +255,9 @@ async def get_return_detail(
     db = get_supabase_client()
     
     # Получаем возврат
-    result = db.table("returns").select("*").eq("id", return_id).execute()
+    result = await async_execute(
+        db.table("returns").select("*").eq("id", return_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
@@ -253,11 +265,13 @@ async def get_return_detail(
     ret = result.data[0]
     
     # Проверяем что заказ принадлежит пользователю
-    order_result = db.table("orders").select("*").eq(
-        "id", ret["order_id"]
-    ).eq(
-        "user_id", user_id
-    ).execute()
+    order_result = await async_execute(
+        db.table("orders").select("*").eq(
+            "id", ret["order_id"]
+        ).eq(
+            "user_id", user_id
+        )
+    )
     
     if not order_result.data:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
@@ -266,14 +280,16 @@ async def get_return_detail(
     
     # Получаем информацию о товаре через группу
     product_name = "Товар"
-    group_result = db.table("groups").select(
-        "product_id"
-    ).eq("id", order["group_id"]).execute()
+    group_result = await async_execute(
+        db.table("groups").select("product_id").eq("id", order["group_id"])
+    )
     
     if group_result.data:
-        product_result = db.table("products").select(
-            "name, image_url"
-        ).eq("id", group_result.data[0]["product_id"]).execute()
+        product_result = await async_execute(
+            db.table("products").select(
+                "name, image_url"
+            ).eq("id", group_result.data[0]["product_id"])
+        )
         
         if product_result.data:
             product_name = product_result.data[0]["name"]
@@ -312,7 +328,9 @@ async def cancel_return(
     db = get_supabase_client()
     
     # Получаем возврат
-    result = db.table("returns").select("*").eq("id", return_id).execute()
+    result = await async_execute(
+        db.table("returns").select("*").eq("id", return_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
@@ -320,9 +338,9 @@ async def cancel_return(
     ret = result.data[0]
     
     # Проверяем владельца
-    order_result = db.table("orders").select("user_id, status").eq(
-        "id", ret["order_id"]
-    ).execute()
+    order_result = await async_execute(
+        db.table("orders").select("user_id, status").eq("id", ret["order_id"])
+    )
     
     if not order_result.data or order_result.data[0]["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
@@ -335,12 +353,16 @@ async def cancel_return(
         )
     
     # Отменяем (удаляем заявку)
-    db.table("returns").delete().eq("id", return_id).execute()
+    await async_execute(
+        db.table("returns").delete().eq("id", return_id)
+    )
     
     # Восстанавливаем статус заказа
-    db.table("orders").update({
-        "status": "delivered"
-    }).eq("id", ret["order_id"]).execute()
+    await async_execute(
+        db.table("orders").update({
+            "status": "delivered"
+        }).eq("id", ret["order_id"])
+    )
     
     return {
         "success": True,

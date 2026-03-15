@@ -34,6 +34,8 @@ from services.payment_service import get_payment_service
 from services.group_manager import get_group_manager
 from utils.auth import get_current_user
 from logger import get_logger
+from utils.async_db import async_execute
+from config import settings 
 
 logger = get_logger("payments")
 
@@ -99,12 +101,11 @@ async def process_successful_payment(order_id: int, db):
     2. Обновляем статус заказа
     """
     # Получаем заказ
-    order = (
+    order = await async_execute(
         db.table("orders")
         .select("user_id, group_id, comment")
         .eq("id", order_id)
         .limit(1)
-        .execute()
     )
     
     if not order.data:
@@ -140,10 +141,10 @@ async def process_successful_payment(order_id: int, db):
         "comment": "Оплата заморожена"
     }]
     
-    db.table("orders").update({
+    await async_execute(db.table("orders").update({
         "status": "frozen",
         "status_history": status_history
-    }).eq("id", order_id).execute()
+    }).eq("id", order_id))
     
     return result.success
 
@@ -266,10 +267,10 @@ async def handle_webhook(
         # Обновляем статус платежа
         original_payment_id = payment_data.get("payment_id")
         if original_payment_id:
-            db.table("payments").update({
+            await async_execute(db.table("payments").update({
                 "status": "refunded",
                 "refunded_at": datetime.now(timezone.utc).isoformat()
-            }).eq("external_id", original_payment_id).execute()
+            }).eq("external_id", original_payment_id))
         
         return WebhookResponse(
             success=True,
@@ -302,12 +303,11 @@ async def get_payment_status(
     db = get_db()
     
     # Получаем платёж с проверкой владельца
-    result = (
+    result = await async_execute(
         db.table("payments")
         .select("*, orders(user_id)")
         .eq("id", payment_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
@@ -364,13 +364,12 @@ async def check_order_payment_status(
     db = get_db()
     
     # Получаем заказ
-    result = (
+    result = await async_execute(
         db.table("orders")
         .select("status, payments(status, external_id)")
         .eq("id", order_id)
         .eq("user_id", user_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
@@ -444,12 +443,11 @@ async def capture_payment(
     payment_service = get_payment_service()
     
     # Получаем платёж
-    result = (
+    result = await async_execute(
         db.table("payments")
         .select("external_id, status, amount")
         .eq("id", payment_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
@@ -516,12 +514,11 @@ async def refund_payment(
     payment_service = get_payment_service()
     
     # Получаем платёж
-    result = (
+    result = await async_execute(
         db.table("payments")
         .select("external_id, status, amount")
         .eq("id", payment_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:

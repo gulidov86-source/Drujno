@@ -249,8 +249,8 @@ def build_group_list_item(group_data, product_data, creator_data=None):
 async def get_groups(
     category_id: Optional[int] = Query(None, description="Категория товара"),
     product_id: Optional[int] = Query(None, description="ID товара"),
-    status: str = Query("active", regex="^(active|completed|all)$", description="Статус сбора"),
-    sort_by: str = Query("popular", regex="^(popular|ending_soon|new|almost_done)$", description="Сортировка"),
+    status: str = Query("active", pattern="^(active|completed|all)$", description="Статус сбора"),
+    sort_by: str = Query("popular", pattern="^(popular|ending_soon|new|almost_done)$", description="Сортировка"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     user_id: Optional[int] = Depends(get_current_user_optional)
@@ -277,7 +277,7 @@ async def get_groups(
         query = query.order("current_count", desc=True)
     offset = (page - 1) * per_page
     query = query.range(offset, offset + per_page - 1)
-    esult = await async_execute(query)
+    result = await async_execute(query)
     items = []
     for group_data in (result.data or []):
         product_data = group_data.get("products", {})
@@ -495,13 +495,12 @@ async def leave_group(
     db = get_db()
     
     # Получаем сбор С ТОВАРОМ (нужно для пересчёта цены)
-    group = (
+    group = await async_execute(
         db.table("groups")
         .select("status, creator_id, current_count, min_participants, "
                 "product_id, products(base_price, price_tiers)")
         .eq("id", group_id)
         .limit(1)
-        .execute()
     )
     
     if not group.data:
@@ -525,13 +524,12 @@ async def leave_group(
         )
     
     # Проверяем членство
-    membership = (
+    membership = await async_execute(
         db.table("group_members")
         .select("id")
         .eq("group_id", group_id)
         .eq("user_id", user_id)
         .limit(1)
-        .execute()
     )
     
     if not membership.data:
@@ -555,13 +553,13 @@ async def leave_group(
     old_price = calculate_current_price(price_tiers, old_count, base_price)
     
     # Удаляем из участников
-    db.table("group_members").delete().eq("group_id", group_id).eq("user_id", user_id).execute()
+    dawait async_execute(db.table("group_members").delete().eq("group_id", group_id).eq("user_id", user_id))
     
     # Обновляем счётчик вручную (для надёжности, не полагаемся только на триггер)
     new_count = max(0, old_count - 1)
-    db.table("groups").update({
+    await async_execute(db.table("groups").update({
         "current_count": new_count
-    }).eq("id", group_id).execute()
+    }).eq("id", group_id))
     
     # Цена ПОСЛЕ выхода
     new_price = calculate_current_price(price_tiers, new_count, base_price)
@@ -627,13 +625,13 @@ async def get_share_data(
 @router.get("/my/all", response_model=MyGroupsResponse, summary="Мои сборы")
 async def get_my_groups(user_id: int = Depends(get_current_user)):
     db = get_db()
-    memberships = db.table("group_members").select("group_id").eq("user_id", user_id).execute()
+    memberships = await async_execute(db.table("group_members").select("group_id").eq("user_id", user_id))
     group_ids = [m["group_id"] for m in (memberships.data or [])]
     active = []
     completed = []
     organized = []
     if group_ids:
-        groups = db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").in_("id", group_ids).execute()
+        groups = await async_execute(db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").in_("id", group_ids))
         for group_data in (groups.data or []):
             product_data = group_data.get("products", {})
             item = build_group_list_item(group_data, product_data)
@@ -641,7 +639,7 @@ async def get_my_groups(user_id: int = Depends(get_current_user)):
                 active.append(item)
             elif group_data["status"] == "completed":
                 completed.append(item)
-    my_groups = db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").eq("creator_id", user_id).execute()
+    my_groups = await async_execute(db.table("groups").select("*, products(id, name, image_url, base_price, price_tiers)").eq("creator_id", user_id))
     for group_data in (my_groups.data or []):
         product_data = group_data.get("products", {})
         item = build_group_list_item(group_data, product_data)
@@ -659,15 +657,14 @@ async def get_group_members(
     user_id: Optional[int] = Depends(get_current_user_optional)
 ):
     db = get_db()
-    group = db.table("groups").select("id").eq("id", group_id).limit(1).execute()
+    group = await async_execute(db.table("groups").select("id").eq("id", group_id).limit(1))
     if not group.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сбор не найден")
-    members = (
+    members = await async_execute(
         db.table("group_members")
         .select("user_id, joined_at, users(first_name, username)")
         .eq("group_id", group_id)
         .order("joined_at", desc=False)
-        .execute()
     )
     result = []
     for member in (members.data or []):

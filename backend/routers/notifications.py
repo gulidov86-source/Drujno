@@ -32,6 +32,7 @@ import sys
 sys.path.append("..")
 from utils.auth import get_current_user
 from database.connection import get_supabase_client
+from utils.async_db import async_execute
 
 
 # ============================================================
@@ -85,7 +86,7 @@ async def get_notifications(
         query = query.eq("is_read", False)
     
     query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-    result = query.execute()
+    result = await async_execute(query)
     
     notifications = []
     for n in (result.data or []):
@@ -128,9 +129,11 @@ async def get_unread_count(
     """
     db = get_supabase_client()
     
-    result = db.table("notifications").select(
-        "id", count="exact"
-    ).eq("user_id", user_id).eq("is_read", False).execute()
+    result = await async_execute(
+        db.table("notifications").select(
+            "id", count="exact"
+        ).eq("user_id", user_id).eq("is_read", False)
+    )
     
     return {
         "success": True,
@@ -148,9 +151,11 @@ async def mark_as_read(
     """
     db = get_supabase_client()
     
-    result = db.table("notifications").update({
-        "is_read": True
-    }).eq("id", notification_id).eq("user_id", user_id).execute()
+    result = await async_execute(
+        db.table("notifications").update({
+            "is_read": True
+        }).eq("id", notification_id).eq("user_id", user_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Уведомление не найдено")
@@ -167,9 +172,11 @@ async def mark_all_as_read(
     """
     db = get_supabase_client()
     
-    db.table("notifications").update({
-        "is_read": True
-    }).eq("user_id", user_id).eq("is_read", False).execute()
+    await async_execute(
+        db.table("notifications").update({
+            "is_read": True
+        }).eq("user_id", user_id).eq("is_read", False)
+    )
     
     return {
         "success": True,
@@ -186,9 +193,11 @@ async def get_notification_settings(
     """
     db = get_supabase_client()
     
-    result = db.table("users").select(
-        "notification_settings"
-    ).eq("id", user_id).execute()
+    result = await async_execute(
+        db.table("users").select(
+            "notification_settings"
+        ).eq("id", user_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -232,9 +241,11 @@ async def update_notification_settings(
     db = get_supabase_client()
     
     # Получаем текущие настройки
-    user_result = db.table("users").select(
-        "notification_settings"
-    ).eq("id", user_id).execute()
+    user_result = await async_execute(
+        db.table("users").select(
+            "notification_settings"
+        ).eq("id", user_id)
+    )
     
     if not user_result.data:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -248,9 +259,11 @@ async def update_notification_settings(
     current.update(update_data)
     
     # Сохраняем
-    db.table("users").update({
-        "notification_settings": json.dumps(current)
-    }).eq("id", user_id).execute()
+    await async_execute(
+        db.table("users").update({
+            "notification_settings": json.dumps(current)
+        }).eq("id", user_id)
+    )
     
     return {
         "success": True,

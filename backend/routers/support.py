@@ -38,6 +38,7 @@ import sys
 sys.path.append("..")
 from utils.auth import get_current_user
 from database.connection import get_supabase_client
+from utils.async_db import async_execute
 
 
 # ============================================================
@@ -124,9 +125,11 @@ async def create_ticket(
     
     # Если указан order_id — проверяем что заказ принадлежит пользователю
     if request.order_id:
-        order_check = db.table("orders").select("id").eq(
-            "id", request.order_id
-        ).eq("user_id", user_id).execute()
+        order_check = await async_execute(
+            db.table("orders").select("id").eq(
+                "id", request.order_id
+            ).eq("user_id", user_id)
+        )
         
         if not order_check.data:
             raise HTTPException(status_code=404, detail="Заказ не найден")
@@ -149,7 +152,9 @@ async def create_ticket(
         "messages": json.dumps([first_message])
     }
     
-    result = db.table("support_tickets").insert(ticket_data).execute()
+    result = await async_execute(
+        db.table("support_tickets").insert(ticket_data)
+    )
     
     if not result.data:
         raise HTTPException(status_code=500, detail="Ошибка создания обращения")
@@ -192,7 +197,7 @@ async def get_my_tickets(
         query = query.eq("status", status)
     
     query = query.order("updated_at", desc=True).range(offset, offset + limit - 1)
-    result = query.execute()
+    result = await async_execute(query)
     
     tickets = []
     for t in (result.data or []):
@@ -255,7 +260,7 @@ async def get_faq(
         query = query.eq("category", category)
     
     query = query.order("sort_order", desc=False)
-    result = query.execute()
+    result = await async_execute(query)
     
     # Группируем по категориям
     faq_by_category = {}
@@ -286,9 +291,11 @@ async def get_ticket_detail(
     """
     db = get_supabase_client()
     
-    result = db.table("support_tickets").select("*").eq(
-        "id", ticket_id
-    ).eq("user_id", user_id).execute()
+    result = await async_execute(
+        db.table("support_tickets").select("*").eq(
+            "id", ticket_id
+        ).eq("user_id", user_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
@@ -329,9 +336,11 @@ async def send_message(
     db = get_supabase_client()
     
     # Получаем тикет
-    result = db.table("support_tickets").select("*").eq(
-        "id", ticket_id
-    ).eq("user_id", user_id).execute()
+    result = await async_execute(
+        db.table("support_tickets").select("*").eq(
+            "id", ticket_id
+        ).eq("user_id", user_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
@@ -356,10 +365,12 @@ async def send_message(
     messages.append(new_message)
     
     # Обновляем тикет
-    db.table("support_tickets").update({
-        "messages": json.dumps(messages),
-        "status": "open"  # Если был waiting_user — возвращаем в open
-    }).eq("id", ticket_id).execute()
+    await async_execute(
+        db.table("support_tickets").update({
+            "messages": json.dumps(messages),
+            "status": "open"  # Если был waiting_user — возвращаем в open
+        }).eq("id", ticket_id)
+    )
     
     # TODO: Уведомить админа о новом сообщении
     
@@ -379,9 +390,11 @@ async def close_ticket(
     """
     db = get_supabase_client()
     
-    result = db.table("support_tickets").select("id, status").eq(
-        "id", ticket_id
-    ).eq("user_id", user_id).execute()
+    result = await async_execute(
+        db.table("support_tickets").select("id, status").eq(
+            "id", ticket_id
+        ).eq("user_id", user_id)
+    )
     
     if not result.data:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
@@ -389,9 +402,11 @@ async def close_ticket(
     if result.data[0]["status"] == "closed":
         raise HTTPException(status_code=400, detail="Обращение уже закрыто")
     
-    db.table("support_tickets").update({
-        "status": "closed"
-    }).eq("id", ticket_id).execute()
+    await async_execute(
+        db.table("support_tickets").update({
+            "status": "closed"
+        }).eq("id", ticket_id)
+    )
     
     return {
         "success": True,

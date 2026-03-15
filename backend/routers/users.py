@@ -403,11 +403,10 @@ async def update_my_profile(
     data_to_update["updated_at"] = datetime.utcnow().isoformat()
     
     # Обновляем
-    result = (
+    result = await async_execute(
         db.table("users")
         .update(data_to_update)
         .eq("id", user_id)
-        .execute()
     )
     
     if not result.data:
@@ -453,7 +452,7 @@ async def get_my_stats(user_id: int = Depends(get_current_user)):
     db = get_db()
     
     # Получаем пользователя
-    result = db.table("users").select("*").eq("id", user_id).limit(1).execute()
+    result = await async_execute(db.table("users").select("*").eq("id", user_id).limit(1))
     
     if not result.data:
         raise HTTPException(
@@ -466,11 +465,10 @@ async def get_my_stats(user_id: int = Depends(get_current_user)):
     level_info = get_level_info(level)
     
     # Считаем участие в сборах
-    members_result = (
+    members_result = await async_execute(
         db.table("group_members")
         .select("id", count="exact")
         .eq("user_id", user_id)
-        .execute()
     )
     groups_participated = members_result.count or 0
     
@@ -502,13 +500,12 @@ async def get_my_addresses(user_id: int = Depends(get_current_user)):
     """Получить все адреса пользователя."""
     db = get_db()
     
-    result = (
+    result = await async_execute(
         db.table("addresses")
         .select("*")
         .eq("user_id", user_id)
         .order("is_default", desc=True)
         .order("created_at", desc=True)
-        .execute()
     )
     
     return [Address(**addr) for addr in (result.data or [])]
@@ -534,7 +531,7 @@ async def add_address(
     
     # Если новый адрес по умолчанию — снимаем флаг с остальных
     if address_data.is_default:
-        db.table("addresses").update({"is_default": False}).eq("user_id", user_id).execute()
+        await async_execute(db.table("addresses").update({"is_default": False}).eq("user_id", user_id))
     
     # Создаём адрес
     new_address = {
@@ -551,7 +548,7 @@ async def add_address(
         "is_default": address_data.is_default
     }
     
-    result = db.table("addresses").insert(new_address).execute()
+    result = await async_execute(db.table("addresses").insert(new_address))
     
     if not result.data:
         raise HTTPException(
@@ -577,12 +574,11 @@ async def update_address(
     db = get_db()
     
     # Проверяем, что адрес принадлежит пользователю
-    existing = (
+    existing = await async_execute(
         db.table("addresses")
         .select("id")
         .eq("id", address_id)
         .eq("user_id", user_id)
-        .execute()
     )
     
     if not existing.data:
@@ -593,7 +589,7 @@ async def update_address(
     
     # Если делаем адресом по умолчанию — снимаем флаг с остальных
     if address_data.is_default:
-        db.table("addresses").update({"is_default": False}).eq("user_id", user_id).execute()
+        await async_execute(db.table("addresses").update({"is_default": False}).eq("user_id", user_id))
     
     # Обновляем
     update_data = {
@@ -609,7 +605,7 @@ async def update_address(
         "is_default": address_data.is_default
     }
     
-    result = db.table("addresses").update(update_data).eq("id", address_id).execute()
+    result = await async_execute(db.table("addresses").update(update_data).eq("id", address_id))
     
     return Address(**result.data[0])
 
@@ -628,12 +624,11 @@ async def delete_address(
     db = get_db()
     
     # Проверяем, что адрес принадлежит пользователю
-    existing = (
+    existing = await async_execute(
         db.table("addresses")
         .select("id")
         .eq("id", address_id)
         .eq("user_id", user_id)
-        .execute()
     )
     
     if not existing.data:
@@ -643,7 +638,7 @@ async def delete_address(
         )
     
     # Удаляем
-    db.table("addresses").delete().eq("id", address_id).execute()
+    await async_execute(db.table("addresses").delete().eq("id", address_id))
     
     return None
 
@@ -662,12 +657,11 @@ async def get_notification_settings(user_id: int = Depends(get_current_user)):
     """Получить настройки уведомлений."""
     db = get_db()
     
-    result = (
+    result = await async_execute(
         db.table("users")
         .select("notification_settings")
         .eq("id", user_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
@@ -693,11 +687,10 @@ async def update_notification_settings(
     """Обновить настройки уведомлений."""
     db = get_db()
     
-    result = (
+    result = await async_execute(
         db.table("users")
         .update({"notification_settings": settings_data.model_dump()})
         .eq("id", user_id)
-        .execute()
     )
     
     if not result.data:

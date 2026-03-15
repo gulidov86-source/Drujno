@@ -44,7 +44,7 @@ from services.payment_service import get_payment_service
 from services.group_manager import get_group_manager
 from utils.auth import get_current_user
 from rate_limiter import limiter, create_limit
-
+from utils.async_db import async_execute  # ← ДОБАВИТЬ
 
 # ============================================================
 # РОУТЕР
@@ -185,7 +185,7 @@ def format_address(address_data: dict) -> str:
 
 @router.get("", response_model=OrderListResponse, summary="Мои заказы")
 async def get_my_orders(
-    status_filter: str = Query("all", alias="status", regex="^(active|completed|cancelled|all)$"),
+    status_filter: str = Query("all", alias="status", pattern="^(active|completed|cancelled|all)$"),    
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     user_id: int = Depends(get_current_user)
@@ -206,7 +206,7 @@ async def get_my_orders(
     query = query.order("created_at", desc=True)
     offset = (page - 1) * per_page
     query = query.range(offset, offset + per_page - 1)
-    result = query.execute()
+    result = await async_execute(query)
 
     items = []
     for order_data in (result.data or []):
@@ -239,7 +239,7 @@ async def get_my_orders(
         count_query = count_query.eq("status", "delivered")
     elif status_filter == "cancelled":
         count_query = count_query.in_("status", ["cancelled", "refunded"])
-    count_result = count_query.execute()
+    count_result = await async_execute(count_query)
 
     return OrderListResponse(items=items, total=count_result.count or 0)
 
@@ -254,10 +254,10 @@ async def get_order_detail(
     user_id: int = Depends(get_current_user)
 ):
     db = get_db()
-    result = (
+    result = await async_execute(
         db.table("orders")
         .select("*, addresses(*), groups(*, products(id, name, description, image_url, base_price)), payments(status, method)")
-        .eq("id", order_id).eq("user_id", user_id).limit(1).execute()
+        .eq("id", order_id).eq("user_id", user_id).limit(1)
     )
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
@@ -328,10 +328,10 @@ async def create_order(
     payment_service = get_payment_service()
 
     # 1. Проверяем сбор
-    group = (
+    group = await async_execute(
         db.table("groups")
         .select("*, products(id, name, base_price, price_tiers)")
-        .eq("id", body.group_id).limit(1).execute()
+        .eq("id", body.group_id).limit(1)
     )
     if not group.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сбор не найден")
@@ -341,17 +341,17 @@ async def create_order(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Сбор недоступен для присоединения")
 
     # 2. Проверяем дубль заказа
-    existing_order = (
+    existing_order = await async_execute(
         db.table("orders").select("id, status")
         .eq("group_id", body.group_id).eq("user_id", user_id)
-        .neq("status", "cancelled").limit(1).execute()
+        .neq("status", "cancelled").limit(1)
     )
     if existing_order.data:
         existing = existing_order.data[0]
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"У вас уже есть заказ #{existing['id']} на этот сбор")
 
     # 3. Проверяем адрес
-    address = db.table("addresses").select("*").eq("id", body.address_id).eq("user_id", user_id).limit(1).execute()
+    address = await async_execute(db.table("addresses").select("*").eq("id", body.address_id).eq("user_id", user_id).limit(1))
     if not address.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Адрес не найден")
     address_data = address.data[0]
@@ -362,18 +362,18 @@ async def create_order(
     base_price = Decimal(str(product_data.get("base_price", 0)))
     current_count = group_data.get("current_count", 0)
 
-    is_already_member = (
+    is_already_member = await async_execute(
         db.table("group_members").select("id")
-        .eq("group_id", body.group_id).eq("user_id", user_id).limit(1).execute()
+        .eq("group_id", body.group_id).eq("user_id", user_id).limit(1)
     )
     if is_already_member.data:
         final_price = calculate_current_price(price_tiers, current_count, base_price)
     else:
         final_price = calculate_current_price(price_tiers, current_count + 1, base_price)
-        db.table("group_members").insert({
+        await async_execute(db.table("group_members").insert({
             "group_id": body.group_id, "user_id": user_id,
             "joined_at": datetime.now(timezone.utc).isoformat()
-        }).execute()
+        }))
         # НЕ обновляем current_count вручную!
         # Триггер БД на group_members автоматически делает +1.
         # Если обновлять И здесь, И триггером — будет двойной счёт.
@@ -389,7 +389,7 @@ async def create_order(
         "delivery_type": body.delivery_type.value, "comment": body.comment,
         "status_history": [{"status": "pending", "timestamp": datetime.now(timezone.utc).isoformat(), "comment": "Заказ создан"}]
     }
-    order_result = db.table("orders").insert(order_data).execute()
+    order_result = await async_execute(db.table("orders").insert(order_data))
     if not order_result.data:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось создать заказ")
     order_id = order_result.data[0]["id"]
@@ -398,7 +398,7 @@ async def create_order(
     product_name = product_data.get("name", "Товар")
     description = f"Групповая покупка: {product_name}"
     return_url = f"{settings.TELEGRAM_WEBAPP_URL}?order={order_id}"
-    user_data = db.table("users").select("phone").eq("id", user_id).limit(1).execute()
+    user_data = await async_execute(db.table("users").select("phone").eq("id", user_id).limit(1))
     user_phone = user_data.data[0].get("phone") if user_data.data else None
 
     receipt_items = [{"name": product_name[:128], "quantity": 1, "price": str(final_price)}]
@@ -410,14 +410,14 @@ async def create_order(
         return_url=return_url, user_phone=user_phone, items=receipt_items
     )
     if not payment_result.success:
-        db.table("orders").delete().eq("id", order_id).execute()
+        await async_execute(db.table("orders").delete().eq("id", order_id))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=payment_result.error or "Ошибка создания платежа")
 
     # 7. Сохраняем invited_by
     if body.invited_by_user_id:
-        db.table("orders").update({
+        await async_execute(db.table("orders").update({
             "comment": f"{body.comment or ''}\n[ref:{body.invited_by_user_id}]".strip()
-        }).eq("id", order_id).execute()
+        }).eq("id", order_id))
 
     return CreateOrderResponse(
         success=True, order_id=order_id,
@@ -447,10 +447,10 @@ async def retry_payment(
     payment_service = get_payment_service()
 
     # Получаем заказ
-    result = (
+    result = await async_execute(
         db.table("orders")
         .select("*, groups(product_id, products(id, name))")
-        .eq("id", order_id).eq("user_id", user_id).limit(1).execute()
+        .eq("id", order_id).eq("user_id", user_id).limit(1)
     )
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
@@ -474,7 +474,7 @@ async def retry_payment(
     return_url = f"{settings.TELEGRAM_WEBAPP_URL}?order={order_id}"
 
     # Телефон для чека (54-ФЗ)
-    user_data = db.table("users").select("phone").eq("id", user_id).limit(1).execute()
+    user_data = await async_execute(db.table("users").select("phone").eq("id", user_id).limit(1))
     user_phone = user_data.data[0].get("phone") if user_data.data else None
 
     receipt_items = [{"name": product_name[:128], "quantity": 1, "price": str(final_price)}]
@@ -525,10 +525,10 @@ async def cancel_order(
     payment_service = get_payment_service()
 
     # Получаем заказ
-    result = (
+    result = await async_execute(
         db.table("orders")
         .select("*, payments(external_id, status)")
-        .eq("id", order_id).eq("user_id", user_id).limit(1).execute()
+        .eq("id", order_id).eq("user_id", user_id).limit(1)
     )
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")
@@ -554,10 +554,10 @@ async def cancel_order(
         "comment": "Отменён пользователем"
     })
 
-    db.table("orders").update({
+    await async_execute(db.table("orders").update({
         "status": "cancelled",
         "status_history": status_history
-    }).eq("id", order_id).execute()
+    }).eq("id", order_id))
 
     # ============================================================
     # АНТИФРОД-ПРОВЕРКА (Спринт 2)
@@ -588,10 +588,10 @@ async def get_order_tracking(
     user_id: int = Depends(get_current_user)
 ):
     db = get_db()
-    result = (
+    result = await async_execute(
         db.table("orders")
         .select("status, tracking_number, delivery_service, estimated_delivery, delivered_at")
-        .eq("id", order_id).eq("user_id", user_id).limit(1).execute()
+        .eq("id", order_id).eq("user_id", user_id).limit(1)
     )
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заказ не найден")

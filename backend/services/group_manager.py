@@ -40,6 +40,7 @@ import sys
 sys.path.append("..")
 from config import settings
 from database.connection import get_db
+from utils.async_db import async_execute
 from services.price_calculator import (
     calculate_current_price,
     get_best_price,
@@ -157,12 +158,11 @@ class GroupManager:
         days = deadline_days or settings.DEFAULT_GROUP_DEADLINE_DAYS
         
         # 1. Проверяем товар
-        product = (
+        product = await async_execute(
             self.db.table("products")
             .select("id, name, is_active, stock")
             .eq("id", product_id)
             .limit(1)
-            .execute()
         )
         
         if not product.data:
@@ -186,13 +186,12 @@ class GroupManager:
             )
         
         # 2. Проверяем, нет ли активного сбора
-        existing_group = (
+        existing_group = await async_execute(
             self.db.table("groups")
             .select("id")
             .eq("product_id", product_id)
             .eq("status", "active")
             .limit(1)
-            .execute()
         )
         
         if existing_group.data:
@@ -203,12 +202,11 @@ class GroupManager:
             )
         
         # 3. Проверяем уровень пользователя (опционально)
-        user = (
+        user = await async_execute(
             self.db.table("users")
             .select("level")
             .eq("id", creator_id)
             .limit(1)
-            .execute()
         )
         
         if not user.data:
@@ -233,7 +231,7 @@ class GroupManager:
             "deadline": deadline.isoformat()
         }
         
-        result = self.db.table("groups").insert(new_group).execute()
+        result = await async_execute(self.db.table("groups").insert(new_group))
         
         if not result.data:
             return GroupCreateResult(
@@ -244,21 +242,25 @@ class GroupManager:
         group_id = result.data[0]["id"]
         
         # 5. Добавляем создателя как участника
-        self.db.table("group_members").insert({
+        await async_execute(self.db.table("group_members").insert({
             "group_id": group_id,
             "user_id": creator_id,
             "invited_by_user_id": None  # Создатель никем не приглашён
-        }).execute()
+        }))
         
         # Обновляем статистику пользователя
-        self.db.table("users").update({
-            "groups_organized": self.db.table("users")
-                .select("groups_organized")
-                .eq("id", creator_id)
-                .limit(1)
-                .execute()
-                .data[0].get("groups_organized", 0) + 1
-        }).eq("id", creator_id).execute()
+        user_stats = await async_execute(
+            self.db.table("users")
+            .select("groups_organized")
+            .eq("id", creator_id)
+            .limit(1)
+        )
+        new_count = user_stats.data[0].get("groups_organized", 0) + 1 if user_stats.data else 1
+        await async_execute(
+            self.db.table("users").update({
+                "groups_organized": new_count
+            }).eq("id", creator_id)
+        )
         
         return GroupCreateResult(
             success=True,
@@ -295,12 +297,11 @@ class GroupManager:
             JoinResult: Результат присоединения
         """
         # 1. Получаем сбор с товаром (для расчёта цен)
-        group = (
+        group = await async_execute(
             self.db.table("groups")
             .select("*, products(base_price, price_tiers)")
             .eq("id", group_id)
             .limit(1)
-            .execute()
         )
         
         if not group.data:
@@ -367,11 +368,11 @@ class GroupManager:
         new_count = old_count + 1  # значение по умолчанию
         
         try:
-            rpc_result = self.db.rpc("join_group_atomic", {
+            rpc_result = await async_execute(self.db.rpc("join_group_atomic", {
                 "p_group_id": group_id,
                 "p_user_id": user_id,
                 "p_invited_by": invited_by_user_id
-            }).execute()
+            }))
             
             if rpc_result.data:
                 rpc_data = rpc_result.data
@@ -421,13 +422,12 @@ class GroupManager:
             
             # Повторяем проверки которые делала бы SQL-функция
             # 3. Проверяем, не участвует ли уже
-            existing_member = (
+            existing_member = await async_execute(
                 self.db.table("group_members")
                 .select("id")
                 .eq("group_id", group_id)
                 .eq("user_id", user_id)
                 .limit(1)
-                .execute()
             )
             
             if existing_member.data:
@@ -452,11 +452,11 @@ class GroupManager:
                 )
             
             # Добавляем участника (старый способ)
-            self.db.table("group_members").insert({
+            await async_execute(self.db.table("group_members").insert({
                 "group_id": group_id,
                 "user_id": user_id,
                 "invited_by_user_id": invited_by_user_id
-            }).execute()
+            }))
             
             new_count = old_count + 1
         
@@ -467,19 +467,20 @@ class GroupManager:
         # 6. Обновляем статистику рефералов
         if invited_by_user_id:
             # Увеличиваем счётчик приглашений у пригласившего
-            inviter = (
+            inviter = await async_execute(
                 self.db.table("users")
                 .select("invited_count")
                 .eq("id", invited_by_user_id)
                 .limit(1)
-                .execute()
             )
             
             if inviter.data:
                 new_invited_count = inviter.data[0].get("invited_count", 0) + 1
-                self.db.table("users").update({
-                    "invited_count": new_invited_count
-                }).eq("id", invited_by_user_id).execute()
+                await async_execute(
+                    self.db.table("users").update({
+                        "invited_count": new_invited_count
+                    }).eq("id", invited_by_user_id)
+                )
         
         # 7. Проверяем, не пора ли автоматически завершить сбор
         # (достигнут максимум участников)
@@ -528,12 +529,11 @@ class GroupManager:
         5. (TODO) Отправляем уведомления
         """
         # Получаем сбор
-        group = (
+        group = await async_execute(
             self.db.table("groups")
             .select("*, products(base_price, price_tiers)")
             .eq("id", group_id)
             .limit(1)
-            .execute()
         )
         
         if not group.data:
@@ -560,10 +560,12 @@ class GroupManager:
         final_price = calculate_current_price(price_tiers, current_count, base_price)
         
         # Обновляем статус
-        self.db.table("groups").update({
-            "status": "completed",
-            "completed_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", group_id).execute()
+        await async_execute(
+            self.db.table("groups").update({
+                "status": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", group_id)
+        )
         
         # Начисляем бонус организатору
         await self._award_organizer_bonus(group_data, final_price)
@@ -591,12 +593,11 @@ class GroupManager:
         2. (TODO) Возвращаем замороженные средства
         3. (TODO) Отправляем уведомления
         """
-        group = (
+        group = await async_execute(
             self.db.table("groups")
             .select("*")
             .eq("id", group_id)
             .limit(1)
-            .execute()
         )
         
         if not group.data:
@@ -614,10 +615,12 @@ class GroupManager:
             )
         
         # Обновляем статус
-        self.db.table("groups").update({
-            "status": "failed",
-            "completed_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", group_id).execute()
+        await async_execute(
+            self.db.table("groups").update({
+                "status": "failed",
+                "completed_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", group_id)
+        )
         
         # TODO: Вернуть замороженные средства
         # TODO: Отправить уведомления
@@ -635,12 +638,11 @@ class GroupManager:
         
         Может отменить только создатель или админ.
         """
-        group = (
+        group = await async_execute(
             self.db.table("groups")
             .select("*")
             .eq("id", group_id)
             .limit(1)
-            .execute()
         )
         
         if not group.data:
@@ -663,10 +665,12 @@ class GroupManager:
             )
         
         # Обновляем статус
-        self.db.table("groups").update({
-            "status": "cancelled",
-            "completed_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", group_id).execute()
+        await async_execute(
+            self.db.table("groups").update({
+                "status": "cancelled",
+                "completed_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", group_id)
+        )
         
         return GroupStatusResult(
             group_id=group_id,
@@ -692,12 +696,11 @@ class GroupManager:
         now = datetime.now(timezone.utc).isoformat()
         
         # Находим просроченные активные сборы
-        expired = (
+        expired = await async_execute(
             self.db.table("groups")
             .select("*")
             .eq("status", "active")
             .lt("deadline", now)
-            .execute()
         )
         
         results = []
@@ -745,12 +748,11 @@ class GroupManager:
         current_count = group_data["current_count"]
         
         # Получаем уровень организатора
-        user = (
+        user = await async_execute(
             self.db.table("users")
             .select("level, total_savings")
             .eq("id", creator_id)
             .limit(1)
-            .execute()
         )
         
         if not user.data:
@@ -782,9 +784,11 @@ class GroupManager:
         # Добавляем к экономии пользователя
         new_savings = Decimal(str(user_data.get("total_savings", 0))) + bonus
         
-        self.db.table("users").update({
-            "total_savings": float(new_savings)
-        }).eq("id", creator_id).execute()
+        await async_execute(
+            self.db.table("users").update({
+                "total_savings": float(new_savings)
+            }).eq("id", creator_id)
+        )
         
         return bonus
     
@@ -815,12 +819,11 @@ class GroupManager:
                 }
         """
         # Получаем сбор с товаром
-        group = (
+        group = await async_execute(
             self.db.table("groups")
             .select("*, products(name, base_price, price_tiers)")
             .eq("id", group_id)
             .limit(1)
-            .execute()
         )
         
         if not group.data:
@@ -867,11 +870,10 @@ class GroupManager:
             dict: Статистика
         """
         # Сборы где пользователь — участник
-        memberships = (
+        memberships = await async_execute(
             self.db.table("group_members")
             .select("group_id, groups(status)")
             .eq("user_id", user_id)
-            .execute()
         )
         
         stats = {
@@ -889,20 +891,18 @@ class GroupManager:
                 stats[status] += 1
         
         # Сборы где пользователь — организатор
-        organized = (
+        organized = await async_execute(
             self.db.table("groups")
             .select("id", count="exact")
             .eq("creator_id", user_id)
-            .execute()
         )
         stats["organized"] = organized.count or 0
         
         # Количество приглашённых в сборы этого пользователя
-        invited = (
+        invited = await async_execute(
             self.db.table("group_members")
             .select("id", count="exact")
             .eq("invited_by_user_id", user_id)
-            .execute()
         )
         stats["people_invited"] = invited.count or 0
         

@@ -550,12 +550,11 @@ async def calculate_product_price(
     db = get_db()
     
     # Получаем товар
-    result = (
+    result = await async_execute(
         db.table("products")
         .select("base_price, price_tiers")
         .eq("id", product_id)
         .limit(1)
-        .execute()
     )
     
     if not result.data:
