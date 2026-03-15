@@ -553,7 +553,7 @@ async def leave_group(
     old_price = calculate_current_price(price_tiers, old_count, base_price)
     
     # Удаляем из участников
-    dawait async_execute(db.table("group_members").delete().eq("group_id", group_id).eq("user_id", user_id))
+    await async_execute(db.table("group_members").delete().eq("group_id", group_id).eq("user_id", user_id))
     
     # Обновляем счётчик вручную (для надёжности, не полагаемся только на триггер)
     new_count = max(0, old_count - 1)
