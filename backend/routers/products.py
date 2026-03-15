@@ -236,7 +236,7 @@ async def get_products(
     has_active_group: Optional[bool] = Query(None, description="Только с активными сборами"),
     
     # Сортировка
-    sort_by: str = Query("popular", regex="^(popular|price_asc|price_desc|new)$"),
+    sort_by: str = Query("popular", pattern="^(popular|price_asc|price_desc|new)$"),
     
     # Пагинация
     page: int = Query(1, ge=1, description="Номер страницы"),
@@ -273,14 +273,14 @@ async def get_products(
         query = query.lte("base_price", max_price)
     
     # Сортировка
-    if sort_by == "popular":
-        query = query.order("total_sold", desc=True)
-    elif sort_by == "price_asc":
+    if sort_by == "price_asc":
         query = query.order("base_price", desc=False)
     elif sort_by == "price_desc":
         query = query.order("base_price", desc=True)
     elif sort_by == "new":
         query = query.order("created_at", desc=True)
+    else:
+        query = query.order("total_sold", desc=True)
     
     # Пагинация
     offset = (page - 1) * per_page
